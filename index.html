@@ -81,12 +81,12 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "https://www.gstat
 
 /* ======= PEGÁ ACÁ TU CONFIG DE FIREBASE (Configuración del proyecto > Tus apps) ======= */
 const firebaseConfig = {
-  apiKey: "AIzaSyApTkrL46F0XhmMbZ6dEXYOVzcBca-iCaM",
-  authDomain: "fadu-seguridad.firebaseapp.com",
-  projectId: "fadu-seguridad",
-  storageBucket: "fadu-seguridad.firebasestorage.app",
-  messagingSenderId: "440485002142",
-  appId: "1:440485002142:web:ad0a9dd7dc06742804348f"
+  apiKey: "TU_API_KEY",
+  authDomain: "TU_PROYECTO.firebaseapp.com",
+  projectId: "TU_PROYECTO",
+  storageBucket: "TU_PROYECTO.appspot.com",
+  messagingSenderId: "TU_SENDER_ID",
+  appId: "TU_APP_ID"
 };
 /* ======================================================================================= */
 
@@ -100,6 +100,19 @@ const ZONES = [
   { id: "200", label: "Sector 200" }, { id: "DEP", label: "Depósitos" },
 ];
 const DELAY_MS = 15 * 60 * 1000;
+
+const APP_VERSION = "1.6.0";
+const CHANGELOG = [
+  "Arreglado un error que dejaba de guardar cambios después de contradecir una solicitud (afectaba solo a esas aulas puntuales).",
+  "TV corregido en las aulas del Sector 100 — y ahora se autocorrige solo si algo así vuelve a pasar.",
+  "Aviso al pedir abrir/cerrar una puerta que ya está en ese estado.",
+  "Ícono 📝 en las aulas que tienen alguna nota cargada.",
+  "Las notas con hora ahora aparecen 30 minutos antes, y al cerrarlas no se borran — vuelven a aparecer la próxima vez que corresponda (ej: el viernes que viene).",
+  "Nueva pantalla \"Ver todas\" las notas, con filtro por día de la semana.",
+  "Marcar varias aulas cerradas y limpias a la vez desde la selección múltiple.",
+  "Historial: se puede filtrar por aula, y ahora muestra la hora del pedido y la hora de ejecución por separado.",
+  "Leyenda de íconos abajo de la pestaña Sectores.",
+];
 const DIAS = ["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
 const DIAS_CORTO = [{v:0,l:"Dom"},{v:1,l:"Lun"},{v:2,l:"Mar"},{v:3,l:"Mié"},{v:4,l:"Jue"},{v:5,l:"Vie"},{v:6,l:"Sáb"}];
 
@@ -107,6 +120,68 @@ function now(){ return Date.now(); }
 function fmtTime(ts){ if(!ts) return ""; return new Date(ts).toLocaleString("es-AR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}); }
 function elapsed(ts){ const m=Math.floor((now()-ts)/60000); if(m<1) return "recién"; if(m<60) return `hace ${m} min`; const h=Math.floor(m/60); return `hace ${h} h ${m%60} min`; }
 function esc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+/* ---------- sonido / vibración / notificación ---------- */
+function playAlert() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const beep = (start) => {
+      const osc = ctx.createOscillator(), gain = ctx.createGain();
+      osc.type = "sine"; osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.001, start);
+      gain.gain.exponentialRampToValueAtTime(0.35, start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.18);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(start); osc.stop(start + 0.2);
+    };
+    const t0 = ctx.currentTime;
+    beep(t0); beep(t0 + 0.25); beep(t0 + 0.5);
+  } catch (e) { /* el navegador bloqueó el audio */ }
+}
+function notifyUser(title, body) {
+  playAlert();
+  if (navigator.vibrate) navigator.vibrate([150, 80, 150, 80, 150]);
+  try {
+    if (typeof Notification !== "undefined" && Notification.permission === "granted") new Notification(title, { body });
+  } catch (e) {}
+}
+
+const notifiedRequestKeys = new Set();
+function checkPendingNotifications() {
+  if (!user || !data || user.role !== "recorrido") return;
+  const myZones = user.zones || [];
+  if (!myZones.length) return;
+  Object.values(data.doors).forEach(d => {
+    if (d.pendingRequest && myZones.includes(d.sector)) {
+      const key = `${d.id}-${d.pendingRequest.requestedAt}`;
+      if (!notifiedRequestKeys.has(key)) {
+        notifiedRequestKeys.add(key);
+        notifyUser("Control Seguridad FADU", `${d.pendingRequest.requestedBy} pide ${d.pendingRequest.type === "open" ? "abrir" : "cerrar"} ${d.label}`);
+      }
+    }
+  });
+}
+
+const notifiedNoteKeys = new Set();
+let noteCheckInterval = null;
+function startNoteChecker() {
+  if (noteCheckInterval) return;
+  noteCheckInterval = setInterval(() => {
+    if (!user || !data) return;
+    const d = new Date();
+    const nowHM = `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+    const todayKey = d.toISOString().slice(0,10);
+    const dow = d.getDay();
+    (data.notes || []).forEach(n => {
+      if (!n.time || n.time !== nowHM) return;
+      if (n.recurrence === "semanal" && !(n.daysOfWeek||[]).includes(dow)) return;
+      const key = n.recurrence === "semanal" ? `${n.id}-${todayKey}` : n.id;
+      if (notifiedNoteKeys.has(key)) return;
+      notifiedNoteKeys.add(key);
+      notifyUser("Recordatorio · Control Seguridad FADU", n.text);
+    });
+  }, 20000);
+}
 
 /* ---------- construcción del edificio ---------- */
 function buildInitialDoors() {
@@ -154,30 +229,52 @@ let saving = false;
 
 async function persist() {
   saving = true; render();
-  try { await setDoc(STATE_DOC, data); document.getElementById("save-error").classList.add("hidden"); }
-  catch (e) { document.getElementById("save-error").classList.remove("hidden"); }
+  try {
+    const clean = JSON.parse(JSON.stringify(data)); // saca cualquier valor "undefined" que Firestore rechazaría
+    await setDoc(STATE_DOC, clean);
+    document.getElementById("save-error").classList.add("hidden");
+  } catch (e) { document.getElementById("save-error").classList.remove("hidden"); }
   finally { saving = false; render(); }
 }
 function update(mutator) { data = mutator(data); persist(); render(); }
 
 onAuthStateChanged(auth, (u) => { if (!u) signInAnonymously(auth).catch(e => alert("Error de conexión: " + e.message)); else boot(); });
 
+// Vuelve a calcular los datos "de fábrica" de cada puerta (nombre, sector, si tiene TV, si es de rutina, etc.)
+// a partir del código actual, pero conserva el estado real (abierta/cerrada, llave, pedidos, limpieza, anomalías).
+// Así, cuando agregamos o corregimos algo en el código (ej: un ícono de TV que faltaba), se autocorrige solo
+// en cualquier celular que ya tenía datos guardados, sin que haya que borrar nada a mano.
+function reconcileDoors(storedDoors) {
+  const canonical = buildInitialDoors();
+  const result = {};
+  Object.keys(canonical).forEach(id => {
+    const c = canonical[id];
+    const s = storedDoors[id];
+    const pr = s && s.pendingRequest ? { ...s.pendingRequest, catedra: s.pendingRequest.catedra || null } : (s ? s.pendingRequest : c.pendingRequest);
+    result[id] = {
+      ...c,
+      status: s ? s.status : c.status,
+      keyHolder: s ? s.keyHolder : c.keyHolder,
+      pendingRequest: pr,
+      clean: s ? !!s.clean : c.clean,
+      anomalies: s && s.anomalies ? s.anomalies : c.anomalies,
+    };
+  });
+  return result;
+}
+
 async function boot() {
   const snap = await getDoc(STATE_DOC);
-  if (!snap.exists()) { data = EMPTY_STATE(); await setDoc(STATE_DOC, data); }
+  if (!snap.exists()) { data = EMPTY_STATE(); await setDoc(STATE_DOC, JSON.parse(JSON.stringify(data))); }
   else {
     const d = snap.data();
-    const doors = { ...d.doors };
-    Object.keys(doors).forEach(id => { doors[id] = { clean:false, anomalies:[], excludeFromStats:false, ...doors[id] }; });
-    data = { doors, staff: d.staff || {}, history: d.history || [], catedras: d.catedras || [], notes: d.notes || [] };
+    data = { doors: reconcileDoors(d.doors || {}), staff: d.staff || {}, history: d.history || [], catedras: d.catedras || [], notes: d.notes || [] };
   }
   loaded = true; render();
   onSnapshot(STATE_DOC, (snap) => {
     if (!snap.exists()) return;
     const d = snap.data();
-    const doors = { ...d.doors };
-    Object.keys(doors).forEach(id => { doors[id] = { clean:false, anomalies:[], excludeFromStats:false, ...doors[id] }; });
-    data = { doors, staff: d.staff || {}, history: d.history || [], catedras: d.catedras || [], notes: d.notes || [] };
+    data = { doors: reconcileDoors(d.doors || {}), staff: d.staff || {}, history: d.history || [], catedras: d.catedras || [], notes: d.notes || [] };
     render();
   });
 }
@@ -265,12 +362,15 @@ function renderLogin() {
 
 function loginAs(name, s) {
   user = { name, role: s.role, zones: s.zones || [] };
+  if (typeof Notification !== "undefined" && Notification.permission === "default") { try { Notification.requestPermission(); } catch(e){} }
+  startNoteChecker();
   document.getElementById("view-login").classList.add("hidden");
   document.getElementById("view-app").classList.remove("hidden");
   document.getElementById("tabs-nav").classList.remove("hidden");
   document.getElementById("tab-btn-personal").classList.toggle("hidden", user.role !== "jefe");
   document.getElementById("user-sub").textContent = `${user.name} · ${user.role==="jefe"?"Oficina Seguridad":"Pisos"}`;
   render();
+  checkVersionPopup();
 }
 document.getElementById("btn-logout").onclick = () => location.reload();
 document.querySelectorAll(".tab-btn").forEach(btn => btn.onclick = () => {
@@ -288,7 +388,7 @@ function requestChange(doorId, type, catedra) {
 function markDoor(doorId, status, clean) {
   update(prev => {
     const d = prev.doors[doorId]; const pr = d.pendingRequest;
-    const entry = { id:`${doorId}-${now()}`, doorId, doorLabel:d.label, action:status, requestedBy: pr?pr.requestedBy:null, requestedAt: pr?pr.requestedAt:null, catedra: pr?pr.catedra:null, executedBy:user.name, executedAt: now() };
+    const entry = { id:`${doorId}-${now()}`, doorId, doorLabel:d.label, action:status, requestedBy: pr?pr.requestedBy:null, requestedAt: pr?pr.requestedAt:null, catedra: (pr && pr.catedra) ? pr.catedra : null, executedBy:user.name, executedAt: now() };
     return { ...prev,
       doors: { ...prev.doors, [doorId]: { ...d, status, keyHolder: status==="open"?user.name:null, pendingRequest:null, clean: status==="closed" ? !!clean : false } },
       history: [entry, ...prev.history].slice(0,300) };
@@ -318,8 +418,35 @@ function renameCatedra(oldName, newName) {
     return { ...prev, catedras, doors, history };
   });
 }
-function addNote(note) { update(prev => ({ ...prev, notes: [{ id:`note-${now()}`, createdBy:user.name, createdAt:now(), doorIds: note.doorIds||[], ...note }, ...(prev.notes||[])] })); }
+function addNote(note) { update(prev => ({ ...prev, notes: [{ id:`note-${now()}`, createdBy:user.name, createdAt:now(), doorIds: note.doorIds||[], dismissedOccurrences: [], ...note }, ...(prev.notes||[])] })); }
 function deleteNote(id) { update(prev => ({ ...prev, notes: (prev.notes||[]).filter(n=>n.id!==id) })); }
+function dismissNote(id, occurrenceKey) {
+  update(prev => ({ ...prev, notes: (prev.notes||[]).map(n => n.id===id ? { ...n, dismissedOccurrences: [...(n.dismissedOccurrences||[]), occurrenceKey] } : n) }));
+}
+
+function todayDateStr(d) { return (d||new Date()).toISOString().slice(0,10); }
+function occurrenceKeyFor(note, dateStr) { return note.recurrence === "semanal" ? `${note.id}|${dateStr}` : note.id; }
+function isNoteActiveNow(note, d) {
+  const dow = d.getDay();
+  if (note.recurrence === "semanal" && !(note.daysOfWeek||[]).includes(dow)) return false;
+  if (note.time) {
+    const [hh, mm] = note.time.split(":").map(Number);
+    const target = new Date(d); target.setHours(hh, mm - 30, 0, 0);
+    if (d < target) return false;
+  }
+  const key = occurrenceKeyFor(note, todayDateStr(d));
+  if ((note.dismissedOccurrences||[]).includes(key)) return false;
+  return true;
+}
+
+function confirmIfAlreadyInState(doorsArr, status) {
+  const already = doorsArr.filter(d => d.status === status && !d.pendingRequest);
+  if (already.length === 0) return true;
+  const accion = status === "open" ? "abierta" : "cerrada";
+  const pedir = status === "open" ? "apertura" : "cierre";
+  if (already.length === 1) return confirm(`${already[0].label} ya está ${accion}. ¿Igual querés pedir la ${pedir}?`);
+  return confirm(`${already.length} de las aulas seleccionadas ya están ${accion}s. ¿Igual querés pedir la ${pedir}?`);
+}
 
 function confirmIfMismatch(doorsArr, status) {
   const mismatched = doorsArr.filter(d => d.pendingRequest && d.pendingRequest.type !== status);
@@ -330,11 +457,29 @@ function confirmIfMismatch(doorsArr, status) {
   return confirm(`${mismatched.length} de las puertas seleccionadas tienen pedido para ${pedido}. ¿Está seguro que quiere marcarlas ${accion}?`);
 }
 
+function checkVersionPopup() {
+  const seen = localStorage.getItem("fadu-seen-version");
+  if (seen === APP_VERSION) return;
+  const root = document.getElementById("detail-root");
+  root.innerHTML = `<div class="sheet" id="version-popup-bg"><div class="sheet-inner">
+      <h2 class="display" style="font-size:20px;font-weight:700;margin:0 0 4px;">Novedades</h2>
+      <p class="mono" style="font-size:11px;color:var(--ink-soft);margin:0 0 16px;">Versión ${APP_VERSION}</p>
+      <ul style="margin:0 0 20px;padding-left:18px;">
+        ${CHANGELOG.map(c => `<li style="font-size:13px;margin-bottom:8px;line-height:1.4;">${esc(c)}</li>`).join("")}
+      </ul>
+      <button id="version-popup-accept" class="btn-primary">Aceptar</button>
+    </div></div>`;
+  document.getElementById("version-popup-accept").onclick = () => {
+    localStorage.setItem("fadu-seen-version", APP_VERSION);
+    root.innerHTML = "";
+  };
+}
+
 function startSelection(id) { selectionMode = true; selectedIds = [id]; render(); }
 function toggleSelect(id) { selectedIds = selectedIds.includes(id) ? selectedIds.filter(x=>x!==id) : [...selectedIds, id]; render(); }
 function clearSelection() { selectionMode = false; selectedIds = []; render(); }
 function bulkRequest(type) {
-  update(prev => { const doors = {...prev.doors}; selectedIds.forEach(id => { doors[id] = {...doors[id], pendingRequest:{type, requestedBy:user.name, requestedAt:now()}}; }); return {...prev, doors}; });
+  update(prev => { const doors = {...prev.doors}; selectedIds.forEach(id => { doors[id] = {...doors[id], pendingRequest:{type, requestedBy:user.name, requestedAt:now(), catedra:null}}; }); return {...prev, doors}; });
   clearSelection();
 }
 function bulkMark(status, clean) {
@@ -342,7 +487,7 @@ function bulkMark(status, clean) {
     const doors = {...prev.doors}; const entries = [];
     selectedIds.forEach(id => {
       const d = doors[id]; const pr = d.pendingRequest;
-      entries.push({ id:`${id}-${now()}-${Math.random().toString(36).slice(2,6)}`, doorId:id, doorLabel:d.label, action:status, requestedBy:pr?pr.requestedBy:null, requestedAt:pr?pr.requestedAt:null, catedra: pr?pr.catedra:null, executedBy:user.name, executedAt:now() });
+      entries.push({ id:`${id}-${now()}-${Math.random().toString(36).slice(2,6)}`, doorId:id, doorLabel:d.label, action:status, requestedBy:pr?pr.requestedBy:null, requestedAt:pr?pr.requestedAt:null, catedra: (pr && pr.catedra) ? pr.catedra : null, executedBy:user.name, executedAt:now() });
       doors[id] = { ...d, status, keyHolder: status==="open"?user.name:null, pendingRequest:null, clean: status==="closed" ? !!clean : false };
     });
     return { ...prev, doors, history: [...entries, ...prev.history].slice(0,300) };
@@ -365,12 +510,13 @@ function plateHTML(d) {
     tag = `<span class="mono" style="font-size:7px;margin-top:2px;color:var(--ink-soft)">no rutina</span>`;
   }
   const selected = selectedIds.includes(d.id);
+  const hasNotes = (data.notes||[]).some(n => n.doorIds && n.doorIds.includes(d.id));
   return `<button class="plate" data-door="${d.id}"
       style="${selected?'background:var(--brass-soft);border-color:var(--brass);border-width:2px;':''}">
     ${d.hasTV ? '<span style="position:absolute;top:3px;left:3px;font-size:10px;">📺</span>' : ''}
     ${(d.anomalies||[]).some(a=>!a.resolved) ? '<span style="position:absolute;bottom:3px;right:3px;font-size:10px;">⚠️</span>' : ''}
     ${d.status==="closed" && d.clean ? '<span style="position:absolute;bottom:3px;left:3px;font-size:10px;">✅</span>' : ''}
-    ${selectionMode ? `<span style="position:absolute;top:3px;right:3px;width:14px;height:14px;border-radius:4px;border:1px solid var(--brass);background:${selected?'var(--brass)':'#fff'};color:#fff;font-size:9px;display:flex;align-items:center;justify-content:center;">${selected?'✓':''}</span>` : ''}
+    ${selectionMode ? `<span style="position:absolute;top:3px;right:3px;width:14px;height:14px;border-radius:4px;border:1px solid var(--brass);background:${selected?'var(--brass)':'#fff'};color:#fff;font-size:9px;display:flex;align-items:center;justify-content:center;">${selected?'✓':''}</span>` : (hasNotes ? '<span style="position:absolute;top:3px;right:3px;font-size:10px;">📝</span>' : '')}
     <span class="dot ${dotClass}" style="background:${dotColor}"></span>
     <span class="mono" style="font-size:11px;font-weight:600;text-align:center;line-height:1.1;">${esc(d.label)}</span>${tag}
   </button>`;
@@ -392,6 +538,7 @@ function render() {
   if (!loaded) return;
   if (!user) { renderLogin(); return; }
 
+  checkPendingNotifications();
   const allDoors = Object.values(data.doors);
   const pendingList = allDoors.filter(d=>d.pendingRequest).sort((a,b)=>a.pendingRequest.requestedAt-b.pendingRequest.requestedAt);
   document.getElementById("badge-label").textContent = pendingList.length ? `Solicitudes (${pendingList.length})` : "Solicitudes";
@@ -434,19 +581,24 @@ function renderInicio(allDoors, pendingList) {
 
   html += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
       <p class="display" style="font-size:18px;font-weight:700;margin:0;">Notas</p>
-      <button id="toggle-note-form" style="font-size:12px;font-weight:600;color:var(--brass);">+ Agregar</button>
+      <div style="display:flex;gap:10px;">
+        <button id="see-all-notes" style="font-size:12px;font-weight:600;color:var(--brass);">Ver todas</button>
+        <button id="toggle-note-form" style="font-size:12px;font-weight:600;color:var(--brass);">+ Agregar</button>
+      </div>
     </div>
     <div id="note-form-root"></div>`;
-  if (!notes.length) html += `<p style="font-size:12px;color:var(--ink-soft);margin-bottom:16px;">No hay notas cargadas.</p>`;
+  const nowD = new Date();
+  const activeNotes = notes.filter(n => isNoteActiveNow(n, nowD));
+  if (!activeNotes.length) html += `<p style="font-size:12px;color:var(--ink-soft);margin-bottom:16px;">No hay notas activas ahora mismo.</p>`;
   else {
-    html += `<div style="margin-bottom:20px;">` + notes.map(n => `
+    html += `<div style="margin-bottom:20px;">` + activeNotes.map(n => `
       <div class="card" style="margin-bottom:8px;">
         <div style="display:flex;justify-content:space-between;gap:8px;">
           <p style="font-size:13px;font-weight:600;margin:0;">${esc(n.text)}</p>
-          <button data-del-note="${n.id}" style="color:var(--ink-soft);font-size:14px;line-height:1;">×</button>
+          <button data-close-note="${n.id}" style="color:var(--ink-soft);font-size:11px;font-weight:600;white-space:nowrap;">Cerrar ✕</button>
         </div>
         ${n.doorIds && n.doorIds.length ? `<p style="font-size:11px;color:var(--brass);font-weight:600;margin:2px 0 0;">Aulas: ${n.doorIds.map(id=>data.doors[id]?.label||id).join(", ")}</p>` : ""}
-        <p style="font-size:11px;color:var(--ink-soft);margin:2px 0 0;">${n.recurrence==="semanal"?`Todos los ${(n.daysOfWeek||[]).map(v=>DIAS[v]).join(", ")}`:"Una vez"}${n.time?` · ${n.time} hs`:""}${n.recurrence==="semanal"&&(n.daysOfWeek||[]).includes(today)?" · hoy":""} · cargó ${esc(n.createdBy)}</p>
+        <p style="font-size:11px;color:var(--ink-soft);margin:2px 0 0;">${n.recurrence==="semanal"?`Todos los ${(n.daysOfWeek||[]).map(v=>DIAS[v]).join(", ")}`:"Una vez"}${n.time?` · ${n.time} hs`:""} · cargó ${esc(n.createdBy)}</p>
       </div>`).join("") + `</div>`;
   }
 
@@ -507,7 +659,14 @@ function renderSectores(allDoors) {
     </div>
     <p style="font-size:11px;color:var(--ink-soft);margin-bottom:8px;">Mantené presionada un aula para seleccionar varias juntas.</p>
     ${!shown.length ? `<p style="font-size:13px;color:var(--ink-soft);">No hay ninguna en este sector con ese filtro.</p>` : ""}
-    <div class="grid4">${shown.map(plateHTML).join("")}</div>`;
+    <div class="grid4">${shown.map(plateHTML).join("")}</div>
+    <div style="margin-top:20px;padding-top:12px;border-top:1px solid #E4DECB;display:flex;flex-wrap:wrap;gap:10px;font-size:10px;color:var(--ink-soft);">
+      <span>📺 tiene TV</span>
+      <span>✅ cerrada y limpia</span>
+      <span>⚠️ anomalía sin resolver</span>
+      <span>📝 tiene notas</span>
+      <span>🔴/🟢 parpadeo = piden cerrar/abrir</span>
+    </div>`;
 }
 
 /* ---------- Solicitudes ---------- */
@@ -584,7 +743,12 @@ function bindTabHandlers(root) {
   if (tab==="inicio") {
     root.querySelectorAll("[data-filter]").forEach(b => b.onclick = () => { filterInicio = filterInicio===b.dataset.filter?null:b.dataset.filter; render(); });
     root.querySelectorAll("[data-goto]").forEach(b => b.onclick = () => { tab = b.dataset.goto; document.querySelectorAll(".tab-btn").forEach(x=>x.classList.toggle("active", x.dataset.tab===tab)); render(); });
-    root.querySelectorAll("[data-del-note]").forEach(b => b.onclick = () => deleteNote(b.dataset.delNote));
+    root.querySelectorAll("[data-close-note]").forEach(b => b.onclick = () => {
+      const n = (data.notes||[]).find(x=>x.id===b.dataset.closeNote);
+      if (n) dismissNote(n.id, occurrenceKeyFor(n, todayDateStr(new Date())));
+    });
+    const seeAllBtn = document.getElementById("see-all-notes");
+    if (seeAllBtn) seeAllBtn.onclick = () => renderAllNotesSheet();
     const toggleBtn = document.getElementById("toggle-note-form");
     if (toggleBtn) toggleBtn.onclick = () => {
       const r = document.getElementById("note-form-root");
@@ -679,9 +843,39 @@ function renderSelectionBar(pendingList) {
   document.getElementById("sel-mark-open").onclick = () => { const doorsArr = selectedIds.map(id=>data.doors[id]); if (confirmIfMismatch(doorsArr, "open")) bulkMark("open"); };
   document.getElementById("sel-mark-closed").onclick = () => { const doorsArr = selectedIds.map(id=>data.doors[id]); if (confirmIfMismatch(doorsArr, "closed")) bulkMark("closed", document.getElementById("sel-clean").checked); };
   const ro = document.getElementById("sel-req-open"), rc = document.getElementById("sel-req-closed");
-  if (ro) ro.onclick = () => bulkRequest("open");
-  if (rc) rc.onclick = () => bulkRequest("closed");
+  if (ro) ro.onclick = () => { const doorsArr = selectedIds.map(id=>data.doors[id]); if (confirmIfAlreadyInState(doorsArr, "open")) bulkRequest("open"); };
+  if (rc) rc.onclick = () => { const doorsArr = selectedIds.map(id=>data.doors[id]); if (confirmIfAlreadyInState(doorsArr, "closed")) bulkRequest("closed"); };
   document.getElementById("sel-add-note").onclick = () => { noteDraftIds = [...selectedIds]; renderNoteSheet(); };
+}
+
+let allNotesDayFilter = "todos"; // "todos" | 0-6
+function renderAllNotesSheet() {
+  const root = document.getElementById("detail-root");
+  const notes = [...(data.notes||[])].sort((a,b)=>b.createdAt-a.createdAt);
+  const shown = allNotesDayFilter === "todos" ? notes : notes.filter(n => n.recurrence === "semanal" && (n.daysOfWeek||[]).includes(allNotesDayFilter));
+  const dayChips = [{v:"todos",l:"Todos"}, ...DIAS_CORTO].map(d => `<button class="chip all-notes-day ${allNotesDayFilter===d.v?"active":""}" data-day="${d.v}">${d.l}</button>`).join("");
+
+  root.innerHTML = `<div class="sheet" id="all-notes-bg"><div class="sheet-inner">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <h2 class="display" style="font-size:20px;font-weight:700;margin:0;">Todas las notas</h2>
+      <button id="all-notes-close" style="font-size:20px;">✕</button>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;">${dayChips}</div>
+    ${!shown.length ? `<p style="font-size:13px;color:var(--ink-soft);">No hay notas para este filtro.</p>` : ""}
+    ${shown.map(n => `<div class="card" style="margin-bottom:8px;">
+        <div style="display:flex;justify-content:space-between;gap:8px;">
+          <p style="font-size:13px;font-weight:600;margin:0;">${esc(n.text)}</p>
+          <button data-del-note-all="${n.id}" style="color:var(--red);font-size:11px;font-weight:600;white-space:nowrap;">Eliminar</button>
+        </div>
+        ${n.doorIds && n.doorIds.length ? `<p style="font-size:11px;color:var(--brass);font-weight:600;margin:2px 0 0;">Aulas: ${n.doorIds.map(id=>data.doors[id]?.label||id).join(", ")}</p>` : ""}
+        <p style="font-size:11px;color:var(--ink-soft);margin:2px 0 0;">${n.recurrence==="semanal"?`Todos los ${(n.daysOfWeek||[]).map(v=>DIAS[v]).join(", ")}`:"Una vez"}${n.time?` · ${n.time} hs`:""} · cargó ${esc(n.createdBy)}</p>
+      </div>`).join("")}
+  </div></div>`;
+  const close = () => { root.innerHTML = ""; };
+  document.getElementById("all-notes-close").onclick = close;
+  document.getElementById("all-notes-bg").onclick = (e) => { if (e.target.id==="all-notes-bg") close(); };
+  root.querySelectorAll(".all-notes-day").forEach(b => b.onclick = () => { allNotesDayFilter = b.dataset.day==="todos" ? "todos" : parseInt(b.dataset.day); renderAllNotesSheet(); });
+  root.querySelectorAll("[data-del-note-all]").forEach(b => b.onclick = () => { if (confirm("¿Eliminar esta nota para siempre?")) { deleteNote(b.dataset.delNoteAll); renderAllNotesSheet(); } });
 }
 
 function renderNoteSheet() {
@@ -780,6 +974,7 @@ function openCatedraSheet(name) {
 let selectedCatedra = null, markCleanChecked = false;
 function renderDoorDetail() {
   const root = document.getElementById("detail-root");
+  if (document.getElementById("all-notes-bg")) return;
   if (!selectedDoorId || !data.doors[selectedDoorId]) { if (!noteDraftIds) root.innerHTML = ""; return; }
   const d = data.doors[selectedDoorId];
   const pr = d.pendingRequest;
@@ -845,8 +1040,8 @@ function renderDoorDetail() {
   document.getElementById("det-mark-open").onclick = () => { if (confirmIfMismatch([d], "open")) markDoor(d.id, "open"); };
   document.getElementById("det-mark-closed").onclick = () => { if (confirmIfMismatch([d], "closed")) markDoor(d.id, "closed", document.getElementById("det-clean").checked); };
   const ro = document.getElementById("det-req-open"), rc = document.getElementById("det-req-closed");
-  if (ro) ro.onclick = () => requestChange(d.id, "open", selectedCatedra);
-  if (rc) rc.onclick = () => requestChange(d.id, "closed", selectedCatedra);
+  if (ro) ro.onclick = () => { if (confirmIfAlreadyInState([d], "open")) requestChange(d.id, "open", selectedCatedra); };
+  if (rc) rc.onclick = () => { if (confirmIfAlreadyInState([d], "closed")) requestChange(d.id, "closed", selectedCatedra); };
   root.querySelectorAll(".det-cat").forEach(b => b.onclick = () => {
     selectedCatedra = selectedCatedra===b.dataset.cat ? null : b.dataset.cat;
     root.querySelectorAll(".det-cat").forEach(x=>x.classList.toggle("active", x.dataset.cat===selectedCatedra));
