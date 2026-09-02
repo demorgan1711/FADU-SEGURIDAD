@@ -41,6 +41,7 @@
   .chip{padding:8px 12px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid #D8CFB8;background:#fff;white-space:nowrap;}
   .chip.active{background:var(--ink);color:#F7F4EC;}
   .hidden{display:none !important;}
+  .pin-input{letter-spacing:10px;text-align:center;font-size:22px;width:100%;border:1px solid #D8CFB8;border-radius:8px;padding:12px;}
   .row-btn{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #E4DECB;width:100%;text-align:left;}
 </style>
 </head>
@@ -77,7 +78,7 @@
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
-import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, arrayUnion, arrayRemove, deleteField } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
 
 /* ======= PEGÁ ACÁ TU CONFIG DE FIREBASE (Configuración del proyecto > Tus apps) ======= */
 const firebaseConfig = {
@@ -97,22 +98,43 @@ const STATE_DOC = doc(db, "app", "estado");
 
 const ZONES = [
   { id: "100", label: "Sector 100" }, { id: "EP", label: "Entrepiso" },
-  { id: "200", label: "Sector 200" }, { id: "DEP", label: "Depósitos" },
+  { id: "DEP", label: "Depósitos" }, { id: "EP-AUX", label: "Auxiliares Entrepiso" },
+  { id: "200", label: "Sector 200" },
 ];
 const DELAY_MS = 15 * 60 * 1000;
 
-const APP_VERSION = "1.6.0";
-const CHANGELOG = [
-  "Arreglado un error que dejaba de guardar cambios después de contradecir una solicitud (afectaba solo a esas aulas puntuales).",
-  "TV corregido en las aulas del Sector 100 — y ahora se autocorrige solo si algo así vuelve a pasar.",
-  "Aviso al pedir abrir/cerrar una puerta que ya está en ese estado.",
-  "Ícono 📝 en las aulas que tienen alguna nota cargada.",
-  "Las notas con hora ahora aparecen 30 minutos antes, y al cerrarlas no se borran — vuelven a aparecer la próxima vez que corresponda (ej: el viernes que viene).",
-  "Nueva pantalla \"Ver todas\" las notas, con filtro por día de la semana.",
-  "Marcar varias aulas cerradas y limpias a la vez desde la selección múltiple.",
-  "Historial: se puede filtrar por aula, y ahora muestra la hora del pedido y la hora de ejecución por separado.",
-  "Leyenda de íconos abajo de la pestaña Sectores.",
+const APP_VERSION = "1.8.0";
+const VERSION_HISTORY = [
+  { version: "1.6.0", changes: [
+    "Arreglado un error que dejaba de guardar cambios después de contradecir una solicitud (afectaba solo a esas aulas puntuales).",
+    "TV corregido en las aulas del Sector 100 — y ahora se autocorrige solo si algo así vuelve a pasar.",
+    "Aviso al pedir abrir/cerrar una puerta que ya está en ese estado.",
+    "Ícono 📝 en las aulas que tienen alguna nota cargada.",
+    "Las notas con hora ahora aparecen 30 minutos antes, y al cerrarlas no se borran — vuelven a aparecer la próxima vez que corresponda (ej: el viernes que viene).",
+    "Nueva pantalla \"Ver todas\" las notas, con filtro por día de la semana.",
+    "Marcar varias aulas cerradas y limpias a la vez desde la selección múltiple.",
+    "Historial: se puede filtrar por aula, y ahora muestra la hora del pedido y la hora de ejecución por separado.",
+    "Leyenda de íconos abajo de la pestaña Sectores.",
+  ]},
+  { version: "1.7.0", changes: [
+    "Las aulas con TV del Entrepiso ahora son su propio sector \"Auxiliares Entrepiso\", porque usan otro manojo de llaves.",
+    "Login con PIN propio: cada persona (nueva o ya registrada) elige su PIN de 4 dígitos. El jefe puede blanquearlo si alguien se lo olvida.",
+    "Al registrarse ahora se pregunta el turno (mañana/tarde/noche).",
+    "Los avisos de novedades por versión ahora se acumulan: si te salteaste alguna, la próxima vez ves todo lo que te perdiste junto.",
+  ]},
+  { version: "1.7.1", changes: [
+    "Los sectores en la pestaña \"Sectores\" ya no se deslizan de costado — ahora se ven todos de una, ocupando el mínimo espacio posible.",
+  ]},
+  { version: "1.8.0", changes: [
+    "Los sectores del Entrepiso vuelven a su lugar: las aulas con TV quedan en \"Entrepiso\" normal, y las 8 aulas con letra (112 y 124, las puntas) pasan a ser el sector \"Auxiliares Entrepiso\".",
+    "Sacada la leyenda \"no rutina\".",
+    "Arreglado de raíz un bug importante: se perdían cambios (cátedras, aperturas, etc.) cuando varias personas usaban la app al mismo tiempo. Antes cada guardado reescribía el documento entero; ahora cada acción guarda solo el campo que cambió.",
+    "El login con PIN queda recordado 24 horas en el celular — no hace falta volver a buscarte en la lista y tipear el PIN cada vez que abrís la app.",
+    "Reordenados los sectores: 100, Entrepiso, Depósitos, Auxiliares, 200.",
+  ]},
 ];
+// se mantiene por compatibilidad con el resto del código, siempre apunta a la version mas nueva
+const CHANGELOG = VERSION_HISTORY[VERSION_HISTORY.length - 1].changes;
 const DIAS = ["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
 const DIAS_CORTO = [{v:0,l:"Dom"},{v:1,l:"Lun"},{v:2,l:"Mar"},{v:3,l:"Mié"},{v:4,l:"Jue"},{v:5,l:"Vie"},{v:6,l:"Sáb"}];
 
@@ -194,11 +216,11 @@ function buildInitialDoors() {
     add(String(n), String(n), "100", "Sector 100", "aula", true, TV_100.includes(String(n)));
     if (n === 111) add("S", "Aula S (Feldman)", "100", "Sector 100", "aula", false);
   }
-  const SPLIT = [112, 124];
+  const SPLIT = [112, 124]; // puntas del Entrepiso: sus 8 sub-aulas con letra van al sector Auxiliares
   const TV_EP = ["EP101","EP103","EP106","EP109","EP111","EP113","EP115","EP121","EP123"];
   for (let n = 101; n <= 124; n++) {
     if (SPLIT.includes(n)) {
-      ["A","B","C","D"].forEach(l => add(`EP${n}${l}`, `EP${n}${l}`, "EP", "Entrepiso", "aula", false, false, true));
+      ["A","B","C","D"].forEach(l => add(`EP${n}${l}`, `EP${n}${l}`, "EP-AUX", "Auxiliares Entrepiso", "aula", true, false));
     } else {
       const id = `EP${n}`;
       add(id, id, "EP", "Entrepiso", "aula", true, TV_EP.includes(id));
@@ -227,16 +249,25 @@ let filterInicio = null;
 let historialFilter = "";
 let saving = false;
 
-async function persist() {
+async function patchDoc(fields) {
   saving = true; render();
   try {
-    const clean = JSON.parse(JSON.stringify(data)); // saca cualquier valor "undefined" que Firestore rechazaría
+    const clean = JSON.parse(JSON.stringify(fields)); // saca cualquier valor "undefined" que Firestore rechazaría
+    await updateDoc(STATE_DOC, clean);
+    document.getElementById("save-error").classList.add("hidden");
+  } catch (e) { document.getElementById("save-error").classList.remove("hidden"); }
+  finally { saving = false; render(); }
+}
+// uso: solo para escribir/reescribir el documento entero (creacion inicial, o migraciones grandes admin)
+async function persistFull(fullData) {
+  saving = true; render();
+  try {
+    const clean = JSON.parse(JSON.stringify(fullData));
     await setDoc(STATE_DOC, clean);
     document.getElementById("save-error").classList.add("hidden");
   } catch (e) { document.getElementById("save-error").classList.remove("hidden"); }
   finally { saving = false; render(); }
 }
-function update(mutator) { data = mutator(data); persist(); render(); }
 
 onAuthStateChanged(auth, (u) => { if (!u) signInAnonymously(auth).catch(e => alert("Error de conexión: " + e.message)); else boot(); });
 
@@ -263,6 +294,28 @@ function reconcileDoors(storedDoors) {
   return result;
 }
 
+const SESSION_KEY = "fadu-session";
+function saveSession(name) { try { localStorage.setItem(SESSION_KEY, JSON.stringify({ name, ts: Date.now() })); } catch(e){} }
+function loadSessionName() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const s = JSON.parse(raw);
+    if (Date.now() - s.ts > 24 * 60 * 60 * 1000) return null;
+    return s.name;
+  } catch (e) { return null; }
+}
+function clearSession() { try { localStorage.removeItem(SESSION_KEY); } catch(e){} }
+
+let lastTrimAttempt = 0;
+function trimHistoryIfNeeded() {
+  if (!data || !data.history || data.history.length <= 500) return;
+  if (Date.now() - lastTrimAttempt < 60000) return; // no reintentar mas de una vez por minuto
+  lastTrimAttempt = Date.now();
+  const trimmed = [...data.history].sort((a,b) => b.executedAt - a.executedAt).slice(0, 300);
+  patchDoc({ history: trimmed });
+}
+
 async function boot() {
   const snap = await getDoc(STATE_DOC);
   if (!snap.exists()) { data = EMPTY_STATE(); await setDoc(STATE_DOC, JSON.parse(JSON.stringify(data))); }
@@ -270,16 +323,21 @@ async function boot() {
     const d = snap.data();
     data = { doors: reconcileDoors(d.doors || {}), staff: d.staff || {}, history: d.history || [], catedras: d.catedras || [], notes: d.notes || [] };
   }
-  loaded = true; render();
+  loaded = true;
+  const savedName = loadSessionName();
+  if (savedName && data.staff[savedName]) { loginAs(savedName, data.staff[savedName]); }
+  else { render(); }
   onSnapshot(STATE_DOC, (snap) => {
     if (!snap.exists()) return;
     const d = snap.data();
     data = { doors: reconcileDoors(d.doors || {}), staff: d.staff || {}, history: d.history || [], catedras: d.catedras || [], notes: d.notes || [] };
     render();
+    trimHistoryIfNeeded();
   });
 }
 
 /* ---------- login ---------- */
+let loginSelectedName = null;
 function renderLogin() {
   const el = document.getElementById("login-content");
   if (!loaded) { el.innerHTML = `<p style="text-align:center;color:var(--ink-soft);font-size:13px;">Cargando…</p>`; return; }
@@ -294,6 +352,19 @@ function renderLogin() {
       <p style="font-size:13px;color:var(--ink-soft);">Control de aulas y depósitos</p>
     </div>`;
 
+  const turnoChips = (selectedId) => `
+    <label class="mono" style="font-size:11px;color:var(--ink-soft);">TURNO</label>
+    <div style="display:flex;gap:8px;margin:8px 0 20px;">
+      <button data-turno="manana" class="chip turno-pick ${selectedId==='manana'?'active':''}" style="flex:1;">☀️ Mañana</button>
+      <button data-turno="tarde" class="chip turno-pick ${selectedId==='tarde'?'active':''}" style="flex:1;">🌤️ Tarde</button>
+      <button data-turno="noche" class="chip turno-pick ${selectedId==='noche'?'active':''}" style="flex:1;">🌙 Noche</button>
+    </div>`;
+  const pinFields = (label) => `
+    <label class="mono" style="font-size:11px;color:var(--ink-soft);">${label}</label>
+    <input id="new-pin" inputmode="numeric" maxlength="4" placeholder="••••" class="pin-input" style="margin:6px 0 10px;" />
+    <input id="new-pin-confirm" inputmode="numeric" maxlength="4" placeholder="Repetí el PIN" class="pin-input" style="margin:0 0 20px;" />`;
+
+  // ---- PANTALLA: crear el primer usuario del sistema ----
   if (staffArr.length === 0) {
     el.innerHTML = header + `
       <p style="font-size:13px;color:var(--ink-soft);margin-bottom:14px;">Primer uso: creá tu usuario.</p>
@@ -304,21 +375,73 @@ function renderLogin() {
         <button id="boot-role-recorrido" class="chip" style="flex:1;">🚶 Pisos</button>
         <button id="boot-role-jefe" class="chip active" style="flex:1;">👔 Oficina Seguridad</button>
       </div>
+      ${turnoChips(null)}
+      ${pinFields("ELEGÍ TU PIN (4 dígitos)")}
+      <p id="boot-pin-error" class="hidden" style="font-size:11px;color:var(--red);margin:-14px 0 14px;">Los PIN no coinciden.</p>
       <button id="boot-submit" class="btn-primary" disabled>Crear usuario y entrar</button>`;
-    let bootRole = "jefe";
+    let bootRole = "jefe", bootTurno = null;
     const nameI = document.getElementById("boot-name"), btn = document.getElementById("boot-submit");
     const rRec = document.getElementById("boot-role-recorrido"), rJefe = document.getElementById("boot-role-jefe");
     rRec.onclick = () => { bootRole = "recorrido"; rRec.classList.add("active"); rJefe.classList.remove("active"); };
     rJefe.onclick = () => { bootRole = "jefe"; rJefe.classList.add("active"); rRec.classList.remove("active"); };
-    nameI.oninput = () => btn.disabled = !nameI.value.trim();
-    btn.onclick = async () => {
+    el.querySelectorAll(".turno-pick").forEach(b => b.onclick = () => { bootTurno = b.dataset.turno; el.querySelectorAll(".turno-pick").forEach(x=>x.classList.remove("active")); b.classList.add("active"); check(); });
+    const pinI = document.getElementById("new-pin"), pinC = document.getElementById("new-pin-confirm");
+    const check = () => btn.disabled = !(nameI.value.trim() && /^\d{4}$/.test(pinI.value) && /^\d{4}$/.test(pinC.value));
+    nameI.oninput = check; pinI.oninput = check; pinC.oninput = check;
+    btn.onclick = () => {
+      if (pinI.value !== pinC.value) { document.getElementById("boot-pin-error").classList.remove("hidden"); return; }
       const name = nameI.value.trim();
-      update(prev => ({ ...prev, staff: { ...prev.staff, [name]: { role: bootRole, zones: [] } } }));
-      loginAs(name, { role: bootRole, zones: [] });
+      const s = { role: bootRole, zones: [], turno: bootTurno, pin: pinI.value };
+      patchDoc({ [`staff.${name}`]: s });
+      loginAs(name, s);
     };
     return;
   }
 
+  // ---- PANTALLA: eligiendo PIN (usuario ya elegido de la lista) ----
+  if (loginSelectedName) {
+    const s = data.staff[loginSelectedName];
+    if (!s.pin) {
+      el.innerHTML = header + `
+        <p style="font-size:13px;color:var(--ink-soft);margin-bottom:4px;">Primera vez de <b>${esc(loginSelectedName)}</b>.</p>
+        <p style="font-size:12px;color:var(--ink-soft);margin-bottom:16px;">Elegí un PIN de 4 dígitos para entrar la próxima vez.</p>
+        ${pinFields("NUEVO PIN")}
+        <p id="pin-error" class="hidden" style="font-size:11px;color:var(--red);margin:-14px 0 14px;">Los PIN no coinciden.</p>
+        <button id="pin-submit" class="btn-primary" disabled>Guardar PIN y entrar</button>
+        <button id="pin-back" style="width:100%;margin-top:10px;font-size:12px;color:var(--ink-soft);">‹ Volver a la lista</button>`;
+      const pinI = document.getElementById("new-pin"), pinC = document.getElementById("new-pin-confirm"), btn = document.getElementById("pin-submit");
+      const check = () => btn.disabled = !(/^\d{4}$/.test(pinI.value) && /^\d{4}$/.test(pinC.value));
+      pinI.oninput = check; pinC.oninput = check;
+      btn.onclick = () => {
+        if (pinI.value !== pinC.value) { document.getElementById("pin-error").classList.remove("hidden"); return; }
+        const updated = { ...s, pin: pinI.value };
+        patchDoc({ [`staff.${loginSelectedName}`]: updated });
+        loginAs(loginSelectedName, updated);
+      };
+      document.getElementById("pin-back").onclick = () => { loginSelectedName = null; renderLogin(); };
+    } else {
+      el.innerHTML = header + `
+        <p style="font-size:14px;font-weight:600;margin-bottom:14px;">👋 ${esc(loginSelectedName)}</p>
+        <label class="mono" style="font-size:11px;color:var(--ink-soft);">TU PIN</label>
+        <input id="login-pin" inputmode="numeric" maxlength="4" placeholder="••••" class="pin-input" style="margin:6px 0 10px;" />
+        <p id="login-pin-error" class="hidden" style="font-size:11px;color:var(--red);margin:0 0 14px;">PIN incorrecto.</p>
+        <button id="login-pin-submit" class="btn-primary" disabled>Ingresar</button>
+        <button id="pin-back" style="width:100%;margin-top:10px;font-size:12px;color:var(--ink-soft);">‹ Volver a la lista</button>`;
+      const pinI = document.getElementById("login-pin"), btn = document.getElementById("login-pin-submit");
+      pinI.oninput = () => btn.disabled = !/^\d{4}$/.test(pinI.value);
+      const tryLogin = () => {
+        if (pinI.value === s.pin) loginAs(loginSelectedName, s);
+        else document.getElementById("login-pin-error").classList.remove("hidden");
+      };
+      btn.onclick = tryLogin;
+      pinI.onkeydown = (e) => { if (e.key === "Enter" && !btn.disabled) tryLogin(); };
+      document.getElementById("pin-back").onclick = () => { loginSelectedName = null; renderLogin(); };
+      setTimeout(() => pinI.focus(), 50);
+    }
+    return;
+  }
+
+  // ---- PANTALLA: lista de usuarios + crear nuevo ----
   const rowsHtml = (list, icon) => list.map(s => `<button class="row-btn login-pick" data-id="${esc(s.name)}">
       <span style="font-size:14px;">${icon} ${esc(s.name)}</span>
       <span style="font-size:11px;color:var(--ink-soft);">${(s.zones||[]).map(z=>ZONES.find(zz=>zz.id===z)?.label).join(", ")}</span>
@@ -341,27 +464,36 @@ function renderLogin() {
         <button id="new-role-recorrido" class="chip" style="flex:1;">🚶 Pisos</button>
         <button id="new-role-jefe" class="chip active" style="flex:1;">👔 Oficina Seguridad</button>
       </div>
+      ${turnoChips(null)}
+      ${pinFields("ELEGÍ TU PIN (4 dígitos)")}
+      <p id="new-pin-error" class="hidden" style="font-size:11px;color:var(--red);margin:-14px 0 14px;">Los PIN no coinciden.</p>
       <button id="new-user-submit" class="btn-primary" disabled>Crear y entrar</button>
     </div>
-    <p style="font-size:11px;color:var(--ink-soft);text-align:center;">Sin contraseña — el acceso es solo por nombre, por ahora.</p>`;
+    <p style="font-size:11px;color:var(--ink-soft);text-align:center;">El acceso es por nombre + PIN propio.</p>`;
 
-  el.querySelectorAll(".login-pick").forEach(b => b.onclick = () => { const s = data.staff[b.dataset.id]; loginAs(b.dataset.id, s); });
+  el.querySelectorAll(".login-pick").forEach(b => b.onclick = () => { loginSelectedName = b.dataset.id; renderLogin(); });
   document.getElementById("show-new-user").onclick = () => { document.getElementById("new-user-toggle").classList.add("hidden"); document.getElementById("new-user-form").classList.remove("hidden"); };
-  let newRole = "jefe";
+  let newRole = "jefe", newTurno = null;
   const nr = document.getElementById("new-role-recorrido"), nj = document.getElementById("new-role-jefe");
   nr.onclick = () => { newRole = "recorrido"; nr.classList.add("active"); nj.classList.remove("active"); };
   nj.onclick = () => { newRole = "jefe"; nj.classList.add("active"); nr.classList.remove("active"); };
+  el.querySelectorAll(".turno-pick").forEach(b => b.onclick = () => { newTurno = b.dataset.turno; el.querySelectorAll(".turno-pick").forEach(x=>x.classList.remove("active")); b.classList.add("active"); checkNew(); });
   const nnI = document.getElementById("new-user-name"), nBtn = document.getElementById("new-user-submit");
-  nnI.oninput = () => nBtn.disabled = !nnI.value.trim();
+  const nPinI = document.getElementById("new-pin"), nPinC = document.getElementById("new-pin-confirm");
+  const checkNew = () => nBtn.disabled = !(nnI.value.trim() && /^\d{4}$/.test(nPinI.value) && /^\d{4}$/.test(nPinC.value));
+  nnI.oninput = checkNew; nPinI.oninput = checkNew; nPinC.oninput = checkNew;
   nBtn.onclick = () => {
+    if (nPinI.value !== nPinC.value) { document.getElementById("new-pin-error").classList.remove("hidden"); return; }
     const name = nnI.value.trim();
-    update(prev => ({ ...prev, staff: { ...prev.staff, [name]: { role: newRole, zones: [] } } }));
-    loginAs(name, { role: newRole, zones: [] });
+    const s = { role: newRole, zones: [], turno: newTurno, pin: nPinI.value };
+    patchDoc({ [`staff.${name}`]: s });
+    loginAs(name, s);
   };
 }
 
 function loginAs(name, s) {
   user = { name, role: s.role, zones: s.zones || [] };
+  saveSession(name);
   if (typeof Notification !== "undefined" && Notification.permission === "default") { try { Notification.requestPermission(); } catch(e){} }
   startNoteChecker();
   document.getElementById("view-login").classList.add("hidden");
@@ -372,7 +504,7 @@ function loginAs(name, s) {
   render();
   checkVersionPopup();
 }
-document.getElementById("btn-logout").onclick = () => location.reload();
+document.getElementById("btn-logout").onclick = () => { clearSession(); location.reload(); };
 document.querySelectorAll(".tab-btn").forEach(btn => btn.onclick = () => {
   tab = btn.dataset.tab;
   document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
@@ -382,46 +514,54 @@ document.querySelectorAll(".tab-btn").forEach(btn => btn.onclick = () => {
 
 /* ---------- acciones ---------- */
 function requestChange(doorId, type, catedra) {
-  update(prev => ({ ...prev, doors: { ...prev.doors, [doorId]: { ...prev.doors[doorId], pendingRequest: { type, requestedBy: user.name, requestedAt: now(), catedra: catedra || null } } } }));
+  patchDoc({ [`doors.${doorId}.pendingRequest`]: { type, requestedBy: user.name, requestedAt: now(), catedra: catedra || null } });
   selectedDoorId = null; render();
 }
 function markDoor(doorId, status, clean) {
-  update(prev => {
-    const d = prev.doors[doorId]; const pr = d.pendingRequest;
-    const entry = { id:`${doorId}-${now()}`, doorId, doorLabel:d.label, action:status, requestedBy: pr?pr.requestedBy:null, requestedAt: pr?pr.requestedAt:null, catedra: (pr && pr.catedra) ? pr.catedra : null, executedBy:user.name, executedAt: now() };
-    return { ...prev,
-      doors: { ...prev.doors, [doorId]: { ...d, status, keyHolder: status==="open"?user.name:null, pendingRequest:null, clean: status==="closed" ? !!clean : false } },
-      history: [entry, ...prev.history].slice(0,300) };
+  const d = data.doors[doorId]; const pr = d.pendingRequest;
+  const entry = { id:`${doorId}-${now()}`, doorId, doorLabel:d.label, action:status, requestedBy: pr?pr.requestedBy:null, requestedAt: pr?pr.requestedAt:null, catedra: (pr && pr.catedra) ? pr.catedra : null, executedBy:user.name, executedAt: now() };
+  patchDoc({
+    [`doors.${doorId}.status`]: status,
+    [`doors.${doorId}.keyHolder`]: status==="open" ? user.name : null,
+    [`doors.${doorId}.pendingRequest`]: null,
+    [`doors.${doorId}.clean`]: status==="closed" ? !!clean : false,
+    history: arrayUnion(entry),
   });
   selectedDoorId = null; render();
 }
 function reportAnomaly(doorId, text) {
-  update(prev => {
-    const d = prev.doors[doorId];
-    const anomaly = { id:`${doorId}-an-${now()}`, text, reportedBy:user.name, reportedAt:now(), resolved:false };
-    return { ...prev, doors: { ...prev.doors, [doorId]: { ...d, anomalies: [anomaly, ...(d.anomalies||[])] } } };
-  });
+  const anomaly = { id:`${doorId}-an-${now()}`, text, reportedBy:user.name, reportedAt:now(), resolved:false };
+  patchDoc({ [`doors.${doorId}.anomalies`]: arrayUnion(anomaly) });
 }
 function resolveAnomaly(doorId, anomalyId) {
-  update(prev => { const d = prev.doors[doorId]; return { ...prev, doors: { ...prev.doors, [doorId]: { ...d, anomalies: (d.anomalies||[]).map(a=>a.id===anomalyId?{...a,resolved:true}:a) } } }; });
+  const d = data.doors[doorId];
+  const updated = (d.anomalies||[]).map(a => a.id===anomalyId ? {...a, resolved:true} : a);
+  patchDoc({ [`doors.${doorId}.anomalies`]: updated });
 }
-function saveStaff(name, fields) { update(prev => ({ ...prev, staff: { ...prev.staff, [name]: { ...(prev.staff[name]||{}), ...fields } } })); }
-function deleteStaff(name) { update(prev => { const s = {...prev.staff}; delete s[name]; return {...prev, staff:s}; }); }
-function addCatedra(name) { update(prev => (prev.catedras||[]).includes(name) ? prev : { ...prev, catedras: [...(prev.catedras||[]), name] }); }
-function removeCatedra(name) { update(prev => ({ ...prev, catedras: (prev.catedras||[]).filter(c=>c!==name) })); }
+function saveStaff(name, fields) {
+  const current = data.staff[name] || {};
+  patchDoc({ [`staff.${name}`]: { ...current, ...fields } });
+}
+function deleteStaff(name) { patchDoc({ [`staff.${name}`]: deleteField() }); }
+function addCatedra(name) { patchDoc({ catedras: arrayUnion(name) }); }
+function removeCatedra(name) { patchDoc({ catedras: arrayRemove(name) }); }
 function renameCatedra(oldName, newName) {
-  update(prev => {
-    const catedras = (prev.catedras||[]).map(c => c===oldName?newName:c);
-    const doors = { ...prev.doors };
-    Object.keys(doors).forEach(id => { if (doors[id].pendingRequest && doors[id].pendingRequest.catedra===oldName) doors[id] = { ...doors[id], pendingRequest: { ...doors[id].pendingRequest, catedra:newName } }; });
-    const history = prev.history.map(h => h.catedra===oldName ? {...h, catedra:newName} : h);
-    return { ...prev, catedras, doors, history };
+  const patch = { catedras: (data.catedras||[]).map(c => c===oldName?newName:c) };
+  Object.keys(data.doors).forEach(id => {
+    const dd = data.doors[id];
+    if (dd.pendingRequest && dd.pendingRequest.catedra === oldName) patch[`doors.${id}.pendingRequest.catedra`] = newName;
   });
+  patch.history = (data.history||[]).map(h => h.catedra===oldName ? {...h, catedra:newName} : h);
+  patchDoc(patch);
 }
-function addNote(note) { update(prev => ({ ...prev, notes: [{ id:`note-${now()}`, createdBy:user.name, createdAt:now(), doorIds: note.doorIds||[], dismissedOccurrences: [], ...note }, ...(prev.notes||[])] })); }
-function deleteNote(id) { update(prev => ({ ...prev, notes: (prev.notes||[]).filter(n=>n.id!==id) })); }
+function addNote(note) {
+  const full = { id:`note-${now()}`, createdBy:user.name, createdAt:now(), doorIds: note.doorIds||[], dismissedOccurrences: [], ...note };
+  patchDoc({ notes: arrayUnion(full) });
+}
+function deleteNote(id) { patchDoc({ notes: (data.notes||[]).filter(n=>n.id!==id) }); }
 function dismissNote(id, occurrenceKey) {
-  update(prev => ({ ...prev, notes: (prev.notes||[]).map(n => n.id===id ? { ...n, dismissedOccurrences: [...(n.dismissedOccurrences||[]), occurrenceKey] } : n) }));
+  const updated = (data.notes||[]).map(n => n.id===id ? { ...n, dismissedOccurrences: [...(n.dismissedOccurrences||[]), occurrenceKey] } : n);
+  patchDoc({ notes: updated });
 }
 
 function todayDateStr(d) { return (d||new Date()).toISOString().slice(0,10); }
@@ -460,14 +600,20 @@ function confirmIfMismatch(doorsArr, status) {
 function checkVersionPopup() {
   const seen = localStorage.getItem("fadu-seen-version");
   if (seen === APP_VERSION) return;
+  const seenIdx = VERSION_HISTORY.findIndex(v => v.version === seen);
+  // si nunca vio nada, o vio una version que ya no esta en el historial, mostramos solo la ultima
+  const pending = seenIdx === -1 && seen ? [VERSION_HISTORY[VERSION_HISTORY.length - 1]] : VERSION_HISTORY.slice(seenIdx + 1);
+  if (!pending.length) { localStorage.setItem("fadu-seen-version", APP_VERSION); return; }
   const root = document.getElementById("detail-root");
   root.innerHTML = `<div class="sheet" id="version-popup-bg"><div class="sheet-inner">
       <h2 class="display" style="font-size:20px;font-weight:700;margin:0 0 4px;">Novedades</h2>
-      <p class="mono" style="font-size:11px;color:var(--ink-soft);margin:0 0 16px;">Versión ${APP_VERSION}</p>
-      <ul style="margin:0 0 20px;padding-left:18px;">
-        ${CHANGELOG.map(c => `<li style="font-size:13px;margin-bottom:8px;line-height:1.4;">${esc(c)}</li>`).join("")}
-      </ul>
-      <button id="version-popup-accept" class="btn-primary">Aceptar</button>
+      <p class="mono" style="font-size:11px;color:var(--ink-soft);margin:0 0 16px;">Versión actual: ${APP_VERSION}</p>
+      ${pending.map(v => `
+        <p class="mono" style="font-size:11px;color:var(--brass);font-weight:700;margin:14px 0 6px;">VERSIÓN ${v.version}</p>
+        <ul style="margin:0 0 4px;padding-left:18px;">
+          ${v.changes.map(c => `<li style="font-size:13px;margin-bottom:8px;line-height:1.4;">${esc(c)}</li>`).join("")}
+        </ul>`).join("")}
+      <button id="version-popup-accept" class="btn-primary" style="margin-top:14px;">Aceptar</button>
     </div></div>`;
   document.getElementById("version-popup-accept").onclick = () => {
     localStorage.setItem("fadu-seen-version", APP_VERSION);
@@ -479,19 +625,23 @@ function startSelection(id) { selectionMode = true; selectedIds = [id]; render()
 function toggleSelect(id) { selectedIds = selectedIds.includes(id) ? selectedIds.filter(x=>x!==id) : [...selectedIds, id]; render(); }
 function clearSelection() { selectionMode = false; selectedIds = []; render(); }
 function bulkRequest(type) {
-  update(prev => { const doors = {...prev.doors}; selectedIds.forEach(id => { doors[id] = {...doors[id], pendingRequest:{type, requestedBy:user.name, requestedAt:now(), catedra:null}}; }); return {...prev, doors}; });
+  const patch = {};
+  selectedIds.forEach(id => { patch[`doors.${id}.pendingRequest`] = { type, requestedBy: user.name, requestedAt: now(), catedra: null }; });
+  patchDoc(patch);
   clearSelection();
 }
 function bulkMark(status, clean) {
-  update(prev => {
-    const doors = {...prev.doors}; const entries = [];
-    selectedIds.forEach(id => {
-      const d = doors[id]; const pr = d.pendingRequest;
-      entries.push({ id:`${id}-${now()}-${Math.random().toString(36).slice(2,6)}`, doorId:id, doorLabel:d.label, action:status, requestedBy:pr?pr.requestedBy:null, requestedAt:pr?pr.requestedAt:null, catedra: (pr && pr.catedra) ? pr.catedra : null, executedBy:user.name, executedAt:now() });
-      doors[id] = { ...d, status, keyHolder: status==="open"?user.name:null, pendingRequest:null, clean: status==="closed" ? !!clean : false };
-    });
-    return { ...prev, doors, history: [...entries, ...prev.history].slice(0,300) };
+  const patch = {}; const entries = [];
+  selectedIds.forEach(id => {
+    const d = data.doors[id]; const pr = d.pendingRequest;
+    entries.push({ id:`${id}-${now()}-${Math.random().toString(36).slice(2,6)}`, doorId:id, doorLabel:d.label, action:status, requestedBy:pr?pr.requestedBy:null, requestedAt:pr?pr.requestedAt:null, catedra: (pr && pr.catedra) ? pr.catedra : null, executedBy:user.name, executedAt:now() });
+    patch[`doors.${id}.status`] = status;
+    patch[`doors.${id}.keyHolder`] = status==="open" ? user.name : null;
+    patch[`doors.${id}.pendingRequest`] = null;
+    patch[`doors.${id}.clean`] = status==="closed" ? !!clean : false;
   });
+  patch.history = arrayUnion(...entries);
+  patchDoc(patch);
   clearSelection();
 }
 
@@ -506,8 +656,6 @@ function plateHTML(d) {
     dotColor = pr.type==="open" ? "var(--green)" : "var(--red)";
     dotClass = pr.type==="open" ? (delayed?"pgf":"pg") : (delayed?"prf":"pr");
     tag = `<span class="mono" style="font-size:8px;margin-top:2px;color:${dotColor}">${delayed?"¡demorada!":pr.type==="open"?"piden abrir":"piden cerrar"}</span>`;
-  } else if (d.routine === false) {
-    tag = `<span class="mono" style="font-size:7px;margin-top:2px;color:var(--ink-soft)">no rutina</span>`;
   }
   const selected = selectedIds.includes(d.id);
   const hasNotes = (data.notes||[]).some(n => n.doorIds && n.doorIds.includes(d.id));
@@ -650,8 +798,8 @@ function renderInicio(allDoors, pendingList) {
 /* ---------- Sectores ---------- */
 function renderSectores(allDoors) {
   const shown = allDoors.filter(d=>d.sector===activeSector && (!sectorStatusFilter || d.status===sectorStatusFilter));
-  return `<div style="display:flex;gap:8px;margin-bottom:12px;overflow-x:auto;">
-      ${ZONES.map(z=>`<button class="chip sector-pick ${activeSector===z.id?"active":""}" data-zone="${z.id}">${z.label}</button>`).join("")}
+  return `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">
+      ${ZONES.map(z=>`<button class="chip sector-pick ${activeSector===z.id?"active":""}" data-zone="${z.id}" style="font-size:11px;padding:6px 10px;">${z.label}</button>`).join("")}
     </div>
     <div style="display:flex;gap:8px;margin-bottom:12px;">
       <button id="filter-open-toggle" class="chip" style="${sectorStatusFilter==="open"?"border-color:var(--green);background:var(--green-soft);":""}">🚪 Solo abiertas ${sectorStatusFilter==="open"?`(${shown.length})`:""}</button>
@@ -684,7 +832,7 @@ function renderSolicitudes(pendingList) {
 
 /* ---------- Historial ---------- */
 function renderHistorial() {
-  const all = data.history;
+  const all = [...data.history].sort((a,b) => b.executedAt - a.executedAt);
   const filtered = historialFilter ? all.filter(x => x.doorLabel.toLowerCase().includes(historialFilter.toLowerCase())) : all;
   const searchBox = `<div style="margin-bottom:12px;">
       <input id="historial-search" value="${esc(historialFilter)}" placeholder="Filtrar por aula (ej: 106, EP110, S)" style="width:100%;border:1px solid #D8CFB8;border-radius:8px;padding:9px 12px;font-size:13px;" />
@@ -724,7 +872,7 @@ function renderPersonal() {
     <p style="font-size:11px;color:var(--ink-soft);margin-bottom:12px;">Tocá a una persona para cambiarle los pisos o el rol.</p>
     ${!names.length ? `<p style="font-size:13px;color:var(--ink-soft);">Todavía no hay nadie cargado.</p>` : names.map(n => `
       <button class="row-btn" data-edit-staff="${esc(n)}">
-        <span style="font-size:14px;">${data.staff[n].role==="jefe"?"👔":"🚶"} ${esc(n)}</span>
+        <span style="font-size:14px;">${data.staff[n].role==="jefe"?"👔":"🚶"} ${esc(n)} ${data.staff[n].turno ? {manana:"☀️",tarde:"🌤️",noche:"🌙"}[data.staff[n].turno] : ""}</span>
         <span style="font-size:12px;color:var(--ink-soft);">${(data.staff[n].zones||[]).length ? data.staff[n].zones.map(z=>ZONES.find(zz=>zz.id===z)?.label).join(", ") : "sin piso"}</span>
       </button>`).join("")}
     <div style="margin-top:32px;">
@@ -900,22 +1048,31 @@ function openStaffSheet(name) {
   const root = document.getElementById("detail-root");
   let role = existing ? existing.role : "recorrido";
   let zones = existing ? [...(existing.zones||[])] : [];
+  let turno = existing ? (existing.turno || null) : null;
   root.innerHTML = `<div class="sheet" id="staff-sheet-bg"><div class="sheet-inner">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
         <h2 class="display" style="font-size:20px;font-weight:700;margin:0;">${name?esc(name):"Nueva persona"}</h2>
         <button id="staff-close" style="font-size:20px;">✕</button>
       </div>
       ${!name ? `<label class="mono" style="font-size:11px;color:var(--ink-soft);">NOMBRE Y APELLIDO</label>
-        <input id="staff-name" placeholder="Ej: Marcelo Gómez" style="width:100%;border:1px solid #D8CFB8;border-radius:8px;padding:11px 12px;font-size:14px;margin:6px 0 16px;" />` : ""}
+        <input id="staff-name" placeholder="Ej: Marcelo Gómez" style="width:100%;border:1px solid #D8CFB8;border-radius:8px;padding:11px 12px;font-size:14px;margin:6px 0 16px;" />
+        <p style="font-size:11px;color:var(--ink-soft);margin:-10px 0 16px;">Esta persona va a elegir su propio PIN la primera vez que entre.</p>` : ""}
       <label class="mono" style="font-size:11px;color:var(--ink-soft);">ROL</label>
       <div style="display:flex;gap:8px;margin:8px 0 16px;">
         <button id="staff-role-recorrido" class="chip ${role==='recorrido'?'active':''}" style="flex:1;">🚶 Pisos</button>
         <button id="staff-role-jefe" class="chip ${role==='jefe'?'active':''}" style="flex:1;">👔 Oficina Seguridad</button>
       </div>
+      <label class="mono" style="font-size:11px;color:var(--ink-soft);">TURNO</label>
+      <div style="display:flex;gap:8px;margin:8px 0 16px;">
+        <button data-turno="manana" class="chip staff-turno ${turno==='manana'?'active':''}" style="flex:1;">☀️ Mañana</button>
+        <button data-turno="tarde" class="chip staff-turno ${turno==='tarde'?'active':''}" style="flex:1;">🌤️ Tarde</button>
+        <button data-turno="noche" class="chip staff-turno ${turno==='noche'?'active':''}" style="flex:1;">🌙 Noche</button>
+      </div>
       <label class="mono" style="font-size:11px;color:var(--ink-soft);">PISOS ASIGNADOS (podés elegir más de uno)</label>
       <div id="staff-zones" style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 20px;">
         ${ZONES.map(z=>`<button class="chip staff-zone ${zones.includes(z.id)?'active':''}" data-zone="${z.id}">${zones.includes(z.id)?'✓ ':''}${z.label}</button>`).join("")}
       </div>
+      ${name ? `<button id="staff-reset-pin" style="width:100%;margin-bottom:12px;padding:12px;border-radius:8px;color:var(--ink);font-weight:600;font-size:13px;border:1px solid var(--brass);">🔑 Blanquear PIN (se lo olvidó)</button>` : ""}
       <button id="staff-save" class="btn-primary" ${name?'':'disabled'}>${name?"Guardar cambios":"Crear persona"}</button>
       ${name?`<button id="staff-delete" style="width:100%;margin-top:10px;padding:12px;border-radius:8px;color:var(--red);font-weight:600;font-size:13px;border:1px solid var(--red-soft);">Eliminar persona</button>`:""}
     </div></div>`;
@@ -925,18 +1082,21 @@ function openStaffSheet(name) {
   const rRec = document.getElementById("staff-role-recorrido"), rJefe = document.getElementById("staff-role-jefe");
   rRec.onclick = () => { role="recorrido"; rRec.classList.add("active"); rJefe.classList.remove("active"); };
   rJefe.onclick = () => { role="jefe"; rJefe.classList.add("active"); rRec.classList.remove("active"); };
+  root.querySelectorAll(".staff-turno").forEach(b => b.onclick = () => { turno = b.dataset.turno; root.querySelectorAll(".staff-turno").forEach(x=>x.classList.remove("active")); b.classList.add("active"); });
   root.querySelectorAll(".staff-zone").forEach(b => b.onclick = () => {
     const z = b.dataset.zone;
     zones = zones.includes(z) ? zones.filter(x=>x!==z) : [...zones, z];
     root.querySelectorAll(".staff-zone").forEach(x => { const zz = ZONES.find(zo=>zo.id===x.dataset.zone); x.classList.toggle("active", zones.includes(x.dataset.zone)); x.textContent = (zones.includes(x.dataset.zone)?'✓ ':'') + zz.label; });
   });
+  const resetPinBtn = document.getElementById("staff-reset-pin");
+  if (resetPinBtn) resetPinBtn.onclick = () => { if (confirm(`¿Blanquear el PIN de ${name}? La próxima vez que entre va a tener que elegir uno nuevo.`)) { saveStaff(name, { pin: null }); close(); } };
   const saveBtn = document.getElementById("staff-save");
   const nameI = document.getElementById("staff-name");
   if (nameI) nameI.oninput = () => saveBtn.disabled = !nameI.value.trim();
   saveBtn.onclick = () => {
     const id = name || nameI.value.trim();
     if (!name && data.staff[id]) { alert("Ya existe una persona con ese nombre."); return; }
-    saveStaff(id, { role, zones });
+    saveStaff(id, name ? { role, zones, turno } : { role, zones, turno, pin: null });
     close();
   };
   const delBtn = document.getElementById("staff-delete");
@@ -979,7 +1139,7 @@ function renderDoorDetail() {
   const d = data.doors[selectedDoorId];
   const pr = d.pendingRequest;
   const delayed = pr && (now()-pr.requestedAt>DELAY_MS);
-  const doorHist = data.history.filter(h=>h.doorId===d.id).slice(0,5);
+  const doorHist = data.history.filter(h=>h.doorId===d.id).sort((a,b)=>b.executedAt-a.executedAt).slice(0,5);
   const doorNotes = (data.notes||[]).filter(n => n.doorIds && n.doorIds.includes(d.id));
   const catedras = data.catedras || [];
 
@@ -990,7 +1150,6 @@ function renderDoorDetail() {
     </div>
     <p style="margin:0 0 4px;font-weight:600;">Estado actual: ${d.status==="open"?"Abierta 🟢":"Cerrada 🔴"}</p>
     <p style="font-size:13px;color:var(--ink-soft);margin:0 0 16px;">🔑 ${d.keyHolder?`Llave en poder de ${esc(d.keyHolder)}`:"Llave sin registrar"} · ${esc(d.sectorLabel)}</p>
-    ${d.routine===false ? `<div class="card" style="margin-bottom:16px;background:#F1ECDD;"><p style="font-size:12px;margin:0;">⚠️ Este ambiente se maneja aparte, la llave no es del recorrido normal.</p></div>` : ""}
     ${d.hasTV ? `<div class="card" style="margin-bottom:16px;background:#F1ECDD;"><p style="font-size:12px;margin:0;">📺 Tiene TV — extremar el cuidado al cerrar.</p></div>` : ""}
     ${d.status==="closed" && d.clean ? `<div class="card" style="margin-bottom:16px;background:var(--green-soft);"><p style="font-size:12px;margin:0;">✅ Quedó cerrada y limpia — limpieza no necesita revisarla.</p></div>` : ""}
     ${pr ? `<div class="card" style="margin-bottom:16px;background:${pr.type==="open"?"var(--green-soft)":"var(--red-soft)"};">
