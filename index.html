@@ -82,12 +82,12 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "https://www.gstat
 
 /* ======= PEGÁ ACÁ TU CONFIG DE FIREBASE (Configuración del proyecto > Tus apps) ======= */
 const firebaseConfig = {
-  apiKey: "TU_API_KEY",
-  authDomain: "TU_PROYECTO.firebaseapp.com",
-  projectId: "TU_PROYECTO",
-  storageBucket: "TU_PROYECTO.appspot.com",
-  messagingSenderId: "TU_SENDER_ID",
-  appId: "TU_APP_ID"
+  apiKey: "AIzaSyApTkrL46F0XhmMbZ6dEXYOVzcBca-iCaM",
+  authDomain: "fadu-seguridad.firebaseapp.com",
+  projectId: "fadu-seguridad",
+  storageBucket: "fadu-seguridad.firebasestorage.app",
+  messagingSenderId: "440485002142",
+  appId: "1:440485002142:web:ad0a9dd7dc06742804348f"
 };
 /* ======================================================================================= */
 
@@ -103,7 +103,7 @@ const ZONES = [
 ];
 const DELAY_MS = 15 * 60 * 1000;
 
-const APP_VERSION = "1.7.0";
+const APP_VERSION = "1.7.1";
 const VERSION_HISTORY = [
   { version: "1.6.0", changes: [
     "Arreglado un error que dejaba de guardar cambios después de contradecir una solicitud (afectaba solo a esas aulas puntuales).",
@@ -121,6 +121,9 @@ const VERSION_HISTORY = [
     "Login con PIN propio: cada persona (nueva o ya registrada) elige su PIN de 4 dígitos. El jefe puede blanquearlo si alguien se lo olvida.",
     "Al registrarse ahora se pregunta el turno (mañana/tarde/noche).",
     "Los avisos de novedades por versión ahora se acumulan: si te salteaste alguna, la próxima vez ves todo lo que te perdiste junto.",
+  ]},
+  { version: "1.7.1", changes: [
+    "Los sectores en la pestaña \"Sectores\" ya no se deslizan de costado — ahora se ven todos de una, ocupando el mínimo espacio posible.",
   ]},
 ];
 // se mantiene por compatibilidad con el resto del código, siempre apunta a la version mas nueva
@@ -743,8 +746,8 @@ function renderInicio(allDoors, pendingList) {
 /* ---------- Sectores ---------- */
 function renderSectores(allDoors) {
   const shown = allDoors.filter(d=>d.sector===activeSector && (!sectorStatusFilter || d.status===sectorStatusFilter));
-  return `<div style="display:flex;gap:8px;margin-bottom:12px;overflow-x:auto;">
-      ${ZONES.map(z=>`<button class="chip sector-pick ${activeSector===z.id?"active":""}" data-zone="${z.id}">${z.label}</button>`).join("")}
+  return `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">
+      ${ZONES.map(z=>`<button class="chip sector-pick ${activeSector===z.id?"active":""}" data-zone="${z.id}" style="font-size:11px;padding:6px 10px;">${z.label}</button>`).join("")}
     </div>
     <div style="display:flex;gap:8px;margin-bottom:12px;">
       <button id="filter-open-toggle" class="chip" style="${sectorStatusFilter==="open"?"border-color:var(--green);background:var(--green-soft);":""}">🚪 Solo abiertas ${sectorStatusFilter==="open"?`(${shown.length})`:""}</button>
