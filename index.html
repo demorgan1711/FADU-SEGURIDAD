@@ -78,7 +78,7 @@
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
-import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, arrayUnion, arrayRemove, deleteField } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
 
 /* ======= PEGÁ ACÁ TU CONFIG DE FIREBASE (Configuración del proyecto > Tus apps) ======= */
 const firebaseConfig = {
@@ -103,7 +103,7 @@ const ZONES = [
 ];
 const DELAY_MS = 15 * 60 * 1000;
 
-const APP_VERSION = "1.8.0";
+const APP_VERSION = "1.8.1";
 const VERSION_HISTORY = [
   { version: "1.6.0", changes: [
     "Arreglado un error que dejaba de guardar cambios después de contradecir una solicitud (afectaba solo a esas aulas puntuales).",
@@ -128,9 +128,13 @@ const VERSION_HISTORY = [
   { version: "1.8.0", changes: [
     "Los sectores del Entrepiso vuelven a su lugar: las aulas con TV quedan en \"Entrepiso\" normal, y las 8 aulas con letra (112 y 124, las puntas) pasan a ser el sector \"Auxiliares Entrepiso\".",
     "Sacada la leyenda \"no rutina\".",
-    "Arreglado de raíz un bug importante: se perdían cambios (cátedras, aperturas, etc.) cuando varias personas usaban la app al mismo tiempo. Antes cada guardado reescribía el documento entero; ahora cada acción guarda solo el campo que cambió.",
     "El login con PIN queda recordado 24 horas en el celular — no hace falta volver a buscarte en la lista y tipear el PIN cada vez que abrís la app.",
     "Reordenados los sectores: 100, Entrepiso, Depósitos, Auxiliares, 200.",
+  ]},
+  { version: "1.8.1", changes: [
+    "Arreglo de emergencia: el cambio de la versión 1.8.0 que guardaba \"solo lo que cambiaba\" en vez de todo el documento rompió la app para varias aulas. Se volvió al método de guardado anterior (probado y estable).",
+    "Se agregó una reparación automática: si la base de datos quedó con algo en mal estado, la app lo corrige sola la próxima vez que se abre.",
+    "Número de versión visible abajo de todo en la pantalla de inicio de sesión.",
   ]},
 ];
 // se mantiene por compatibilidad con el resto del código, siempre apunta a la version mas nueva
@@ -249,25 +253,16 @@ let filterInicio = null;
 let historialFilter = "";
 let saving = false;
 
-async function patchDoc(fields) {
+async function persist() {
   saving = true; render();
   try {
-    const clean = JSON.parse(JSON.stringify(fields)); // saca cualquier valor "undefined" que Firestore rechazaría
-    await updateDoc(STATE_DOC, clean);
-    document.getElementById("save-error").classList.add("hidden");
-  } catch (e) { document.getElementById("save-error").classList.remove("hidden"); }
-  finally { saving = false; render(); }
-}
-// uso: solo para escribir/reescribir el documento entero (creacion inicial, o migraciones grandes admin)
-async function persistFull(fullData) {
-  saving = true; render();
-  try {
-    const clean = JSON.parse(JSON.stringify(fullData));
+    const clean = JSON.parse(JSON.stringify(data)); // saca cualquier valor "undefined" que Firestore rechazaría
     await setDoc(STATE_DOC, clean);
     document.getElementById("save-error").classList.add("hidden");
   } catch (e) { document.getElementById("save-error").classList.remove("hidden"); }
   finally { saving = false; render(); }
 }
+function update(mutator) { data = mutator(data); persist(); render(); }
 
 onAuthStateChanged(auth, (u) => { if (!u) signInAnonymously(auth).catch(e => alert("Error de conexión: " + e.message)); else boot(); });
 
@@ -294,6 +289,29 @@ function reconcileDoors(storedDoors) {
   return result;
 }
 
+// Corrige cualquier dato que haya quedado con una forma rara (ej: algo que debería ser una lista y no lo es).
+// Si detecta algo raro, lo arregla localmente y avisa para que boot() lo vuelva a guardar ya reparado.
+function sanitizeState(raw) {
+  let repaired = false;
+  let doors = (raw.doors && typeof raw.doors === "object" && !Array.isArray(raw.doors)) ? { ...raw.doors } : {};
+  if (!raw.doors || typeof raw.doors !== "object" || Array.isArray(raw.doors)) repaired = true;
+  Object.keys(doors).forEach(id => {
+    const d = doors[id];
+    if (!d || typeof d !== "object") { delete doors[id]; repaired = true; return; }
+    if (d.pendingRequest && (typeof d.pendingRequest !== "object" || Array.isArray(d.pendingRequest) || !d.pendingRequest.type)) { doors[id] = { ...d, pendingRequest: null }; repaired = true; }
+    if (!Array.isArray(d.anomalies)) { doors[id] = { ...doors[id], anomalies: [] }; repaired = true; }
+  });
+  let staff = (raw.staff && typeof raw.staff === "object" && !Array.isArray(raw.staff)) ? raw.staff : {};
+  if (!raw.staff || typeof raw.staff !== "object" || Array.isArray(raw.staff)) repaired = true;
+  let history = Array.isArray(raw.history) ? raw.history.filter(h => h && typeof h === "object" && h.doorId) : [];
+  if (!Array.isArray(raw.history)) repaired = true;
+  let catedras = Array.isArray(raw.catedras) ? raw.catedras.filter(c => typeof c === "string") : [];
+  if (!Array.isArray(raw.catedras)) repaired = true;
+  let notes = Array.isArray(raw.notes) ? raw.notes.filter(n => n && typeof n === "object" && n.text) : [];
+  if (!Array.isArray(raw.notes)) repaired = true;
+  return { sane: { doors, staff, history, catedras, notes }, repaired };
+}
+
 const SESSION_KEY = "fadu-session";
 function saveSession(name) { try { localStorage.setItem(SESSION_KEY, JSON.stringify({ name, ts: Date.now() })); } catch(e){} }
 function loadSessionName() {
@@ -307,32 +325,32 @@ function loadSessionName() {
 }
 function clearSession() { try { localStorage.removeItem(SESSION_KEY); } catch(e){} }
 
-let lastTrimAttempt = 0;
-function trimHistoryIfNeeded() {
-  if (!data || !data.history || data.history.length <= 500) return;
-  if (Date.now() - lastTrimAttempt < 60000) return; // no reintentar mas de una vez por minuto
-  lastTrimAttempt = Date.now();
-  const trimmed = [...data.history].sort((a,b) => b.executedAt - a.executedAt).slice(0, 300);
-  patchDoc({ history: trimmed });
-}
-
 async function boot() {
   const snap = await getDoc(STATE_DOC);
-  if (!snap.exists()) { data = EMPTY_STATE(); await setDoc(STATE_DOC, JSON.parse(JSON.stringify(data))); }
-  else {
-    const d = snap.data();
-    data = { doors: reconcileDoors(d.doors || {}), staff: d.staff || {}, history: d.history || [], catedras: d.catedras || [], notes: d.notes || [] };
+  let needsRepair = false;
+  if (!snap.exists()) {
+    data = EMPTY_STATE();
+    await setDoc(STATE_DOC, JSON.parse(JSON.stringify(data)));
+  } else {
+    const raw = snap.data();
+    const { sane, repaired } = sanitizeState(raw);
+    needsRepair = repaired;
+    data = { doors: reconcileDoors(sane.doors), staff: sane.staff, history: sane.history, catedras: sane.catedras, notes: sane.notes };
   }
   loaded = true;
+  if (needsRepair) {
+    try { await setDoc(STATE_DOC, JSON.parse(JSON.stringify(data))); } catch (e) {}
+  }
   const savedName = loadSessionName();
   if (savedName && data.staff[savedName]) { loginAs(savedName, data.staff[savedName]); }
   else { render(); }
   onSnapshot(STATE_DOC, (snap) => {
     if (!snap.exists()) return;
-    const d = snap.data();
-    data = { doors: reconcileDoors(d.doors || {}), staff: d.staff || {}, history: d.history || [], catedras: d.catedras || [], notes: d.notes || [] };
+    const raw = snap.data();
+    const { sane, repaired } = sanitizeState(raw);
+    data = { doors: reconcileDoors(sane.doors), staff: sane.staff, history: sane.history, catedras: sane.catedras, notes: sane.notes };
     render();
-    trimHistoryIfNeeded();
+    if (repaired) { try { setDoc(STATE_DOC, JSON.parse(JSON.stringify(data))); } catch (e) {} }
   });
 }
 
@@ -392,7 +410,7 @@ function renderLogin() {
       if (pinI.value !== pinC.value) { document.getElementById("boot-pin-error").classList.remove("hidden"); return; }
       const name = nameI.value.trim();
       const s = { role: bootRole, zones: [], turno: bootTurno, pin: pinI.value };
-      patchDoc({ [`staff.${name}`]: s });
+      update(prev => ({ ...prev, staff: { ...prev.staff, [name]: s } }));
       loginAs(name, s);
     };
     return;
@@ -415,7 +433,7 @@ function renderLogin() {
       btn.onclick = () => {
         if (pinI.value !== pinC.value) { document.getElementById("pin-error").classList.remove("hidden"); return; }
         const updated = { ...s, pin: pinI.value };
-        patchDoc({ [`staff.${loginSelectedName}`]: updated });
+        update(prev => ({ ...prev, staff: { ...prev.staff, [loginSelectedName]: updated } }));
         loginAs(loginSelectedName, updated);
       };
       document.getElementById("pin-back").onclick = () => { loginSelectedName = null; renderLogin(); };
@@ -469,7 +487,8 @@ function renderLogin() {
       <p id="new-pin-error" class="hidden" style="font-size:11px;color:var(--red);margin:-14px 0 14px;">Los PIN no coinciden.</p>
       <button id="new-user-submit" class="btn-primary" disabled>Crear y entrar</button>
     </div>
-    <p style="font-size:11px;color:var(--ink-soft);text-align:center;">El acceso es por nombre + PIN propio.</p>`;
+    <p style="font-size:11px;color:var(--ink-soft);text-align:center;">El acceso es por nombre + PIN propio.</p>
+    <p class="mono" style="font-size:10px;color:var(--ink-soft);text-align:center;margin-top:16px;opacity:0.6;">v${APP_VERSION}</p>`;
 
   el.querySelectorAll(".login-pick").forEach(b => b.onclick = () => { loginSelectedName = b.dataset.id; renderLogin(); });
   document.getElementById("show-new-user").onclick = () => { document.getElementById("new-user-toggle").classList.add("hidden"); document.getElementById("new-user-form").classList.remove("hidden"); };
@@ -486,7 +505,7 @@ function renderLogin() {
     if (nPinI.value !== nPinC.value) { document.getElementById("new-pin-error").classList.remove("hidden"); return; }
     const name = nnI.value.trim();
     const s = { role: newRole, zones: [], turno: newTurno, pin: nPinI.value };
-    patchDoc({ [`staff.${name}`]: s });
+    update(prev => ({ ...prev, staff: { ...prev.staff, [name]: s } }));
     loginAs(name, s);
   };
 }
@@ -514,54 +533,46 @@ document.querySelectorAll(".tab-btn").forEach(btn => btn.onclick = () => {
 
 /* ---------- acciones ---------- */
 function requestChange(doorId, type, catedra) {
-  patchDoc({ [`doors.${doorId}.pendingRequest`]: { type, requestedBy: user.name, requestedAt: now(), catedra: catedra || null } });
+  update(prev => ({ ...prev, doors: { ...prev.doors, [doorId]: { ...prev.doors[doorId], pendingRequest: { type, requestedBy: user.name, requestedAt: now(), catedra: catedra || null } } } }));
   selectedDoorId = null; render();
 }
 function markDoor(doorId, status, clean) {
-  const d = data.doors[doorId]; const pr = d.pendingRequest;
-  const entry = { id:`${doorId}-${now()}`, doorId, doorLabel:d.label, action:status, requestedBy: pr?pr.requestedBy:null, requestedAt: pr?pr.requestedAt:null, catedra: (pr && pr.catedra) ? pr.catedra : null, executedBy:user.name, executedAt: now() };
-  patchDoc({
-    [`doors.${doorId}.status`]: status,
-    [`doors.${doorId}.keyHolder`]: status==="open" ? user.name : null,
-    [`doors.${doorId}.pendingRequest`]: null,
-    [`doors.${doorId}.clean`]: status==="closed" ? !!clean : false,
-    history: arrayUnion(entry),
+  update(prev => {
+    const d = prev.doors[doorId]; const pr = d.pendingRequest;
+    const entry = { id:`${doorId}-${now()}`, doorId, doorLabel:d.label, action:status, requestedBy: pr?pr.requestedBy:null, requestedAt: pr?pr.requestedAt:null, catedra: (pr && pr.catedra) ? pr.catedra : null, executedBy:user.name, executedAt: now() };
+    return { ...prev,
+      doors: { ...prev.doors, [doorId]: { ...d, status, keyHolder: status==="open"?user.name:null, pendingRequest:null, clean: status==="closed" ? !!clean : false } },
+      history: [entry, ...prev.history].slice(0,300) };
   });
   selectedDoorId = null; render();
 }
 function reportAnomaly(doorId, text) {
-  const anomaly = { id:`${doorId}-an-${now()}`, text, reportedBy:user.name, reportedAt:now(), resolved:false };
-  patchDoc({ [`doors.${doorId}.anomalies`]: arrayUnion(anomaly) });
+  update(prev => {
+    const d = prev.doors[doorId];
+    const anomaly = { id:`${doorId}-an-${now()}`, text, reportedBy:user.name, reportedAt:now(), resolved:false };
+    return { ...prev, doors: { ...prev.doors, [doorId]: { ...d, anomalies: [anomaly, ...(d.anomalies||[])] } } };
+  });
 }
 function resolveAnomaly(doorId, anomalyId) {
-  const d = data.doors[doorId];
-  const updated = (d.anomalies||[]).map(a => a.id===anomalyId ? {...a, resolved:true} : a);
-  patchDoc({ [`doors.${doorId}.anomalies`]: updated });
+  update(prev => { const d = prev.doors[doorId]; return { ...prev, doors: { ...prev.doors, [doorId]: { ...d, anomalies: (d.anomalies||[]).map(a=>a.id===anomalyId?{...a,resolved:true}:a) } } }; });
 }
-function saveStaff(name, fields) {
-  const current = data.staff[name] || {};
-  patchDoc({ [`staff.${name}`]: { ...current, ...fields } });
-}
-function deleteStaff(name) { patchDoc({ [`staff.${name}`]: deleteField() }); }
-function addCatedra(name) { patchDoc({ catedras: arrayUnion(name) }); }
-function removeCatedra(name) { patchDoc({ catedras: arrayRemove(name) }); }
+function saveStaff(name, fields) { update(prev => ({ ...prev, staff: { ...prev.staff, [name]: { ...(prev.staff[name]||{}), ...fields } } })); }
+function deleteStaff(name) { update(prev => { const s = {...prev.staff}; delete s[name]; return {...prev, staff:s}; }); }
+function addCatedra(name) { update(prev => (prev.catedras||[]).includes(name) ? prev : { ...prev, catedras: [...(prev.catedras||[]), name] }); }
+function removeCatedra(name) { update(prev => ({ ...prev, catedras: (prev.catedras||[]).filter(c=>c!==name) })); }
 function renameCatedra(oldName, newName) {
-  const patch = { catedras: (data.catedras||[]).map(c => c===oldName?newName:c) };
-  Object.keys(data.doors).forEach(id => {
-    const dd = data.doors[id];
-    if (dd.pendingRequest && dd.pendingRequest.catedra === oldName) patch[`doors.${id}.pendingRequest.catedra`] = newName;
+  update(prev => {
+    const catedras = (prev.catedras||[]).map(c => c===oldName?newName:c);
+    const doors = { ...prev.doors };
+    Object.keys(doors).forEach(id => { if (doors[id].pendingRequest && doors[id].pendingRequest.catedra===oldName) doors[id] = { ...doors[id], pendingRequest: { ...doors[id].pendingRequest, catedra:newName } }; });
+    const history = prev.history.map(h => h.catedra===oldName ? {...h, catedra:newName} : h);
+    return { ...prev, catedras, doors, history };
   });
-  patch.history = (data.history||[]).map(h => h.catedra===oldName ? {...h, catedra:newName} : h);
-  patchDoc(patch);
 }
-function addNote(note) {
-  const full = { id:`note-${now()}`, createdBy:user.name, createdAt:now(), doorIds: note.doorIds||[], dismissedOccurrences: [], ...note };
-  patchDoc({ notes: arrayUnion(full) });
-}
-function deleteNote(id) { patchDoc({ notes: (data.notes||[]).filter(n=>n.id!==id) }); }
+function addNote(note) { update(prev => ({ ...prev, notes: [{ id:`note-${now()}`, createdBy:user.name, createdAt:now(), doorIds: note.doorIds||[], dismissedOccurrences: [], ...note }, ...(prev.notes||[])] })); }
+function deleteNote(id) { update(prev => ({ ...prev, notes: (prev.notes||[]).filter(n=>n.id!==id) })); }
 function dismissNote(id, occurrenceKey) {
-  const updated = (data.notes||[]).map(n => n.id===id ? { ...n, dismissedOccurrences: [...(n.dismissedOccurrences||[]), occurrenceKey] } : n);
-  patchDoc({ notes: updated });
+  update(prev => ({ ...prev, notes: (prev.notes||[]).map(n => n.id===id ? { ...n, dismissedOccurrences: [...(n.dismissedOccurrences||[]), occurrenceKey] } : n) }));
 }
 
 function todayDateStr(d) { return (d||new Date()).toISOString().slice(0,10); }
@@ -625,23 +636,19 @@ function startSelection(id) { selectionMode = true; selectedIds = [id]; render()
 function toggleSelect(id) { selectedIds = selectedIds.includes(id) ? selectedIds.filter(x=>x!==id) : [...selectedIds, id]; render(); }
 function clearSelection() { selectionMode = false; selectedIds = []; render(); }
 function bulkRequest(type) {
-  const patch = {};
-  selectedIds.forEach(id => { patch[`doors.${id}.pendingRequest`] = { type, requestedBy: user.name, requestedAt: now(), catedra: null }; });
-  patchDoc(patch);
+  update(prev => { const doors = {...prev.doors}; selectedIds.forEach(id => { doors[id] = {...doors[id], pendingRequest:{type, requestedBy:user.name, requestedAt:now(), catedra:null}}; }); return {...prev, doors}; });
   clearSelection();
 }
 function bulkMark(status, clean) {
-  const patch = {}; const entries = [];
-  selectedIds.forEach(id => {
-    const d = data.doors[id]; const pr = d.pendingRequest;
-    entries.push({ id:`${id}-${now()}-${Math.random().toString(36).slice(2,6)}`, doorId:id, doorLabel:d.label, action:status, requestedBy:pr?pr.requestedBy:null, requestedAt:pr?pr.requestedAt:null, catedra: (pr && pr.catedra) ? pr.catedra : null, executedBy:user.name, executedAt:now() });
-    patch[`doors.${id}.status`] = status;
-    patch[`doors.${id}.keyHolder`] = status==="open" ? user.name : null;
-    patch[`doors.${id}.pendingRequest`] = null;
-    patch[`doors.${id}.clean`] = status==="closed" ? !!clean : false;
+  update(prev => {
+    const doors = {...prev.doors}; const entries = [];
+    selectedIds.forEach(id => {
+      const d = doors[id]; const pr = d.pendingRequest;
+      entries.push({ id:`${id}-${now()}-${Math.random().toString(36).slice(2,6)}`, doorId:id, doorLabel:d.label, action:status, requestedBy:pr?pr.requestedBy:null, requestedAt:pr?pr.requestedAt:null, catedra: (pr && pr.catedra) ? pr.catedra : null, executedBy:user.name, executedAt:now() });
+      doors[id] = { ...d, status, keyHolder: status==="open"?user.name:null, pendingRequest:null, clean: status==="closed" ? !!clean : false };
+    });
+    return { ...prev, doors, history: [...entries, ...prev.history].slice(0,300) };
   });
-  patch.history = arrayUnion(...entries);
-  patchDoc(patch);
   clearSelection();
 }
 
