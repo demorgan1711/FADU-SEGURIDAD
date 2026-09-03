@@ -103,7 +103,7 @@ const ZONES = [
 ];
 const DELAY_MS = 15 * 60 * 1000;
 
-const APP_VERSION = "1.8.1";
+const APP_VERSION = "1.9.0";
 const VERSION_HISTORY = [
   { version: "1.6.0", changes: [
     "Arreglado un error que dejaba de guardar cambios después de contradecir una solicitud (afectaba solo a esas aulas puntuales).",
@@ -135,6 +135,12 @@ const VERSION_HISTORY = [
     "Arreglo de emergencia: el cambio de la versión 1.8.0 que guardaba \"solo lo que cambiaba\" en vez de todo el documento rompió la app para varias aulas. Se volvió al método de guardado anterior (probado y estable).",
     "Se agregó una reparación automática: si la base de datos quedó con algo en mal estado, la app lo corrige sola la próxima vez que se abre.",
     "Número de versión visible abajo de todo en la pantalla de inicio de sesión.",
+  ]},
+  { version: "1.9.0", changes: [
+    "Las cátedras ahora se cargan con turno (mañana/tarde/noche) y días de la semana.",
+    "Al pedir apertura/cierre solo aparecen las cátedras del turno y el día de quien está pidiendo — así la lista no se llena de cátedras de otros turnos.",
+    "Si la cátedra que necesitás no aparece (porque es de otro turno/día), se puede cargar de nuevo ahí mismo, para ese turno y ese día.",
+    "Las cátedras que ya tenías cargadas (sin turno ni día) siguen apareciendo siempre, sin filtrar.",
   ]},
 ];
 // se mantiene por compatibilidad con el resto del código, siempre apunta a la version mas nueva
@@ -305,7 +311,7 @@ function sanitizeState(raw) {
   if (!raw.staff || typeof raw.staff !== "object" || Array.isArray(raw.staff)) repaired = true;
   let history = Array.isArray(raw.history) ? raw.history.filter(h => h && typeof h === "object" && h.doorId) : [];
   if (!Array.isArray(raw.history)) repaired = true;
-  let catedras = Array.isArray(raw.catedras) ? raw.catedras.filter(c => typeof c === "string") : [];
+  let catedras = Array.isArray(raw.catedras) ? raw.catedras.filter(c => typeof c === "string" || (c && typeof c === "object" && typeof c.name === "string")) : [];
   if (!Array.isArray(raw.catedras)) repaired = true;
   let notes = Array.isArray(raw.notes) ? raw.notes.filter(n => n && typeof n === "object" && n.text) : [];
   if (!Array.isArray(raw.notes)) repaired = true;
@@ -511,7 +517,7 @@ function renderLogin() {
 }
 
 function loginAs(name, s) {
-  user = { name, role: s.role, zones: s.zones || [] };
+  user = { name, role: s.role, zones: s.zones || [], turno: s.turno || null };
   saveSession(name);
   if (typeof Notification !== "undefined" && Notification.permission === "default") { try { Notification.requestPermission(); } catch(e){} }
   startNoteChecker();
@@ -558,15 +564,40 @@ function resolveAnomaly(doorId, anomalyId) {
 }
 function saveStaff(name, fields) { update(prev => ({ ...prev, staff: { ...prev.staff, [name]: { ...(prev.staff[name]||{}), ...fields } } })); }
 function deleteStaff(name) { update(prev => { const s = {...prev.staff}; delete s[name]; return {...prev, staff:s}; }); }
-function addCatedra(name) { update(prev => (prev.catedras||[]).includes(name) ? prev : { ...prev, catedras: [...(prev.catedras||[]), name] }); }
-function removeCatedra(name) { update(prev => ({ ...prev, catedras: (prev.catedras||[]).filter(c=>c!==name) })); }
-function renameCatedra(oldName, newName) {
+function addCatedra(cObj) {
   update(prev => {
-    const catedras = (prev.catedras||[]).map(c => c===oldName?newName:c);
+    const list = prev.catedras || [];
+    if (list.some(c => catedraName(c) === cObj.name)) return prev;
+    return { ...prev, catedras: [...list, cObj] };
+  });
+}
+function removeCatedra(name) { update(prev => ({ ...prev, catedras: (prev.catedras||[]).filter(c=>catedraName(c)!==name) })); }
+function renameCatedra(oldName, fields) {
+  update(prev => {
+    const catedras = (prev.catedras||[]).map(c => catedraName(c)===oldName ? { name: fields.name, turno: fields.turno, dias: fields.dias } : c);
     const doors = { ...prev.doors };
-    Object.keys(doors).forEach(id => { if (doors[id].pendingRequest && doors[id].pendingRequest.catedra===oldName) doors[id] = { ...doors[id], pendingRequest: { ...doors[id].pendingRequest, catedra:newName } }; });
-    const history = prev.history.map(h => h.catedra===oldName ? {...h, catedra:newName} : h);
+    if (fields.name !== oldName) {
+      Object.keys(doors).forEach(id => { if (doors[id].pendingRequest && doors[id].pendingRequest.catedra===oldName) doors[id] = { ...doors[id], pendingRequest: { ...doors[id].pendingRequest, catedra:fields.name } }; });
+    }
+    const history = fields.name !== oldName ? prev.history.map(h => h.catedra===oldName ? {...h, catedra:fields.name} : h) : prev.history;
     return { ...prev, catedras, doors, history };
+  });
+}
+// una catedra puede ser un string viejo (de antes de tener turno/dias) o un objeto {name, turno, dias}
+function catedraName(c) { return typeof c === "string" ? c : c.name; }
+function catedraTurno(c) { return typeof c === "string" ? null : (c.turno || null); }
+function catedraDias(c) { return typeof c === "string" ? [] : (c.dias || []); }
+// las catedras sin turno/dia cargado siguen mostrandose siempre (compatibilidad con lo ya cargado).
+// las que sí tienen turno/dia, solo se muestran si coinciden con el turno de quien pide y el día de hoy.
+function catedrasForToday() {
+  const list = data.catedras || [];
+  const today = new Date().getDay();
+  const myTurno = user && user.turno;
+  return list.filter(c => {
+    const turno = catedraTurno(c), dias = catedraDias(c);
+    const turnoOk = !turno || !myTurno || turno === myTurno;
+    const diaOk = !dias.length || dias.includes(today);
+    return turnoOk && diaOk;
   });
 }
 function addNote(note) { update(prev => ({ ...prev, notes: [{ id:`note-${now()}`, createdBy:user.name, createdAt:now(), doorIds: note.doorIds||[], dismissedOccurrences: [], ...note }, ...(prev.notes||[])] })); }
@@ -884,12 +915,27 @@ function renderPersonal() {
       </button>`).join("")}
     <div style="margin-top:32px;">
       <p class="display" style="font-size:18px;font-weight:700;margin-bottom:6px;">Cátedras</p>
-      <p style="font-size:11px;color:var(--ink-soft);margin-bottom:10px;">Al pedir apertura/cierre vas a poder marcar de qué cátedra es. Tocá una para corregirla — los pedidos y el historial se actualizan solos.</p>
-      <div style="display:flex;gap:8px;margin-bottom:14px;">
-        <input id="new-catedra-input" placeholder="Ej: González" style="flex:1;border:1px solid #D8CFB8;border-radius:8px;padding:9px 12px;font-size:13px;" />
-        <button id="new-catedra-btn" style="background:var(--ink);color:#F7F4EC;padding:9px 14px;border-radius:8px;font-size:13px;font-weight:600;">+ Agregar</button>
+      <p style="font-size:11px;color:var(--ink-soft);margin-bottom:10px;">Al pedir apertura/cierre se muestran solo las cátedras del turno y el día de quien pide. Tocá una para corregirla — los pedidos y el historial se actualizan solos.</p>
+      <div class="card" style="margin-bottom:14px;">
+        <input id="new-catedra-input" placeholder="Ej: González" style="width:100%;border:1px solid #D8CFB8;border-radius:8px;padding:9px 12px;font-size:13px;margin-bottom:10px;" />
+        <label class="mono" style="font-size:11px;color:var(--ink-soft);">TURNO</label>
+        <div style="display:flex;gap:6px;margin:6px 0 10px;">
+          <button data-newcat-turno="manana" class="chip newcat-turno" style="flex:1;font-size:12px;">☀️ Mañana</button>
+          <button data-newcat-turno="tarde" class="chip newcat-turno" style="flex:1;font-size:12px;">🌤️ Tarde</button>
+          <button data-newcat-turno="noche" class="chip newcat-turno" style="flex:1;font-size:12px;">🌙 Noche</button>
+        </div>
+        <label class="mono" style="font-size:11px;color:var(--ink-soft);">DÍAS</label>
+        <div style="display:flex;flex-wrap:wrap;gap:4px;margin:6px 0 12px;">
+          ${["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"].map((l,i)=>`<button data-newcat-day="${i}" class="chip newcat-day" style="font-size:11px;padding:5px 9px;">${l}</button>`).join("")}
+        </div>
+        <button id="new-catedra-btn" class="btn-primary" disabled>+ Agregar cátedra</button>
       </div>
-      ${!catedras.length ? `<p style="font-size:13px;color:var(--ink-soft);">Todavía no cargaste ninguna cátedra.</p>` : `<div style="display:flex;flex-wrap:wrap;gap:8px;">${catedras.map(c=>`<button class="chip" data-edit-catedra="${esc(c)}">✎ ${esc(c)}</button>`).join("")}</div>`}
+      ${!catedras.length ? `<p style="font-size:13px;color:var(--ink-soft);">Todavía no cargaste ninguna cátedra.</p>` : `<div style="display:flex;flex-wrap:wrap;gap:8px;">${catedras.map(c=>{
+        const turno = catedraTurno(c), dias = catedraDias(c);
+        const turnoIcon = turno ? {manana:"☀️",tarde:"🌤️",noche:"🌙"}[turno] : "";
+        const diasTxt = dias.length ? dias.map(d=>["D","L","M","X","J","V","S"][d]).join("") : "";
+        return `<button class="chip" data-edit-catedra="${esc(catedraName(c))}">✎ ${esc(catedraName(c))}${turnoIcon?` ${turnoIcon}`:""}${diasTxt?` ${diasTxt}`:""}</button>`;
+      }).join("")}</div>`}
     </div>`;
 }
 
@@ -926,7 +972,24 @@ function bindTabHandlers(root) {
     root.querySelectorAll("[data-edit-staff]").forEach(b => b.onclick = () => openStaffSheet(b.dataset.editStaff));
     root.querySelectorAll("[data-edit-catedra]").forEach(b => b.onclick = () => openCatedraSheet(b.dataset.editCatedra));
     const ci = document.getElementById("new-catedra-input"), cb = document.getElementById("new-catedra-btn");
-    if (cb) cb.onclick = () => { if (ci.value.trim()) { addCatedra(ci.value.trim()); ci.value=""; } };
+    if (cb) {
+      let newCatTurno = null, newCatDias = [];
+      const check = () => cb.disabled = !ci.value.trim();
+      ci.oninput = check;
+      root.querySelectorAll(".newcat-turno").forEach(b => b.onclick = () => { newCatTurno = newCatTurno===b.dataset.newcatTurno ? null : b.dataset.newcatTurno; root.querySelectorAll(".newcat-turno").forEach(x=>x.classList.toggle("active", x.dataset.newcatTurno===newCatTurno)); });
+      root.querySelectorAll(".newcat-day").forEach(b => b.onclick = () => {
+        const d = parseInt(b.dataset.newcatDay);
+        newCatDias = newCatDias.includes(d) ? newCatDias.filter(x=>x!==d) : [...newCatDias, d].sort();
+        b.classList.toggle("active", newCatDias.includes(d));
+      });
+      cb.onclick = () => {
+        if (!ci.value.trim()) return;
+        addCatedra({ name: ci.value.trim(), turno: newCatTurno, dias: newCatDias });
+        ci.value = ""; newCatTurno = null; newCatDias = [];
+        root.querySelectorAll(".newcat-turno, .newcat-day").forEach(x=>x.classList.remove("active"));
+        check();
+      };
+    }
   }
 }
 
@@ -1111,6 +1174,9 @@ function openStaffSheet(name) {
 }
 
 function openCatedraSheet(name) {
+  const existing = (data.catedras||[]).find(c => catedraName(c) === name);
+  let turno = existing ? catedraTurno(existing) : null;
+  let dias = existing ? [...catedraDias(existing)] : [];
   const root = document.getElementById("detail-root");
   root.innerHTML = `<div class="sheet" id="cat-sheet-bg"><div class="sheet-inner">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
@@ -1121,17 +1187,34 @@ function openCatedraSheet(name) {
       <input id="cat-name" value="${esc(name)}" style="width:100%;border:1px solid #D8CFB8;border-radius:8px;padding:11px 12px;font-size:14px;margin:6px 0 6px;" />
       <p id="cat-error" class="hidden" style="font-size:11px;color:var(--red);margin-bottom:10px;">Ya existe una cátedra con ese nombre.</p>
       <p style="font-size:11px;color:var(--ink-soft);margin-bottom:16px;">Los pedidos y el historial que ya usaron "${esc(name)}" se actualizan solos al nombre nuevo.</p>
+      <label class="mono" style="font-size:11px;color:var(--ink-soft);">TURNO</label>
+      <div style="display:flex;gap:6px;margin:8px 0 16px;">
+        <button data-cat-turno="manana" class="chip cat-turno ${turno==='manana'?'active':''}" style="flex:1;font-size:12px;">☀️ Mañana</button>
+        <button data-cat-turno="tarde" class="chip cat-turno ${turno==='tarde'?'active':''}" style="flex:1;font-size:12px;">🌤️ Tarde</button>
+        <button data-cat-turno="noche" class="chip cat-turno ${turno==='noche'?'active':''}" style="flex:1;font-size:12px;">🌙 Noche</button>
+      </div>
+      <label class="mono" style="font-size:11px;color:var(--ink-soft);">DÍAS</label>
+      <div style="display:flex;flex-wrap:wrap;gap:4px;margin:8px 0 20px;">
+        ${["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"].map((l,i)=>`<button data-cat-day="${i}" class="chip cat-day ${dias.includes(i)?'active':''}" style="font-size:11px;padding:5px 9px;">${l}</button>`).join("")}
+      </div>
+      <p style="font-size:11px;color:var(--ink-soft);margin-bottom:16px;">Si dejás turno o días sin marcar, esta cátedra va a aparecer siempre, sin filtrar.</p>
       <button id="cat-save" class="btn-primary">Guardar cambios</button>
       <button id="cat-delete" style="width:100%;margin-top:10px;padding:12px;border-radius:8px;color:var(--red);font-weight:600;font-size:13px;border:1px solid var(--red-soft);">Eliminar cátedra</button>
     </div></div>`;
   const close = () => { root.innerHTML = ""; };
   document.getElementById("cat-close").onclick = close;
   document.getElementById("cat-sheet-bg").onclick = (e) => { if (e.target.id==="cat-sheet-bg") close(); };
+  root.querySelectorAll(".cat-turno").forEach(b => b.onclick = () => { turno = turno===b.dataset.catTurno ? null : b.dataset.catTurno; root.querySelectorAll(".cat-turno").forEach(x=>x.classList.toggle("active", x.dataset.catTurno===turno)); });
+  root.querySelectorAll(".cat-day").forEach(b => b.onclick = () => {
+    const d = parseInt(b.dataset.catDay);
+    dias = dias.includes(d) ? dias.filter(x=>x!==d) : [...dias, d].sort();
+    b.classList.toggle("active", dias.includes(d));
+  });
   document.getElementById("cat-save").onclick = () => {
     const val = document.getElementById("cat-name").value.trim();
     if (!val) return;
-    if (val !== name && (data.catedras||[]).includes(val)) { document.getElementById("cat-error").classList.remove("hidden"); return; }
-    if (val !== name) renameCatedra(name, val);
+    if (val !== name && (data.catedras||[]).some(c => catedraName(c) === val)) { document.getElementById("cat-error").classList.remove("hidden"); return; }
+    renameCatedra(name, { name: val, turno, dias });
     close();
   };
   document.getElementById("cat-delete").onclick = () => { if (confirm(`¿Eliminar la cátedra ${name}?`)) { removeCatedra(name); close(); } };
@@ -1148,7 +1231,8 @@ function renderDoorDetail() {
   const delayed = pr && (now()-pr.requestedAt>DELAY_MS);
   const doorHist = data.history.filter(h=>h.doorId===d.id).sort((a,b)=>b.executedAt-a.executedAt).slice(0,5);
   const doorNotes = (data.notes||[]).filter(n => n.doorIds && n.doorIds.includes(d.id));
-  const catedras = data.catedras || [];
+  const catedras = catedrasForToday();
+  const totalCatedras = (data.catedras||[]).length;
 
   root.innerHTML = `<div class="sheet" id="sheet-bg"><div class="sheet-inner">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
@@ -1166,7 +1250,8 @@ function renderDoorDetail() {
     ${user.role==="jefe" ? `
       <p class="mono" style="font-size:11px;color:var(--ink-soft);margin-bottom:6px;">PEDIR AL PERSONAL DEL PISO</p>
       <p style="font-size:11px;color:var(--ink-soft);margin-bottom:4px;">Cátedra (opcional)</p>
-      ${catedras.length ? `<div id="det-catedras" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">${catedras.map(c=>`<button class="chip det-cat" data-cat="${esc(c)}">${esc(c)}</button>`).join("")}</div>` : ""}
+      ${catedras.length ? `<div id="det-catedras" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">${catedras.map(c=>`<button class="chip det-cat" data-cat="${esc(catedraName(c))}">${esc(catedraName(c))}</button>`).join("")}</div>` : ""}
+      ${totalCatedras > catedras.length ? `<p style="font-size:10px;color:var(--ink-soft);margin:0 0 6px;">Hay ${totalCatedras - catedras.length} cátedra(s) más cargadas para otro turno/día — si es una de esas, escribila de nuevo abajo.</p>` : ""}
       <div style="display:flex;gap:6px;margin-bottom:4px;">
         <input id="new-cat-inline" placeholder="¿No está en la lista? Escribila acá" style="flex:1;border:1px solid #D8CFB8;border-radius:6px;padding:7px 10px;font-size:12px;" />
         <button id="new-cat-inline-btn" style="background:var(--ink);color:#F7F4EC;padding:0 12px;border-radius:6px;font-size:12px;font-weight:600;">+</button>
@@ -1216,7 +1301,7 @@ function renderDoorDetail() {
   const newCatI = document.getElementById("new-cat-inline"), newCatBtn = document.getElementById("new-cat-inline-btn");
   if (newCatBtn) newCatBtn.onclick = () => {
     const v = newCatI.value.trim(); if (!v) return;
-    if (!catedras.includes(v)) addCatedra(v);
+    if (!(data.catedras||[]).some(c => catedraName(c) === v)) addCatedra({ name: v, turno: user.turno || null, dias: [new Date().getDay()] });
     selectedCatedra = v; newCatI.value = "";
     document.getElementById("cat-selected-label").textContent = `Seleccionada: ${v}`;
   };
