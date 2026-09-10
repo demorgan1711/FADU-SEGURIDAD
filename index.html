@@ -107,7 +107,7 @@ const ZONES = [
 ];
 const DELAY_MS = 15 * 60 * 1000;
 
-const APP_VERSION = "1.15.1";
+const APP_VERSION = "1.15.0";
 const VERSION_HISTORY = [
   { version: "1.6.0", changes: [
     "Arreglado un error que dejaba de guardar cambios después de contradecir una solicitud (afectaba solo a esas aulas puntuales).",
@@ -167,11 +167,6 @@ const VERSION_HISTORY = [
   { version: "1.15.0", changes: [
     "Al cargar una cátedra (desde Personal o al pedir apertura/cierre), ahora va sugiriendo las que ya existen a medida que escribís, para no duplicar por error.",
     "Una cátedra ahora puede tener varias aulas asociadas, no solo una — para los casos que abarcan 2 a 5 aulas, incluso de pisos distintos.",
-  ]},
-  { version: "1.15.1", changes: [
-    "Arreglado: el aviso de novedades (y otras ventanas) se cerraban solas apenas llegaba cualquier actualización de datos en tiempo real.",
-    "Arreglado: al otorgar el permiso de gestionar cátedras, ahora se aplica al toque para esa persona, sin que tenga que volver a entrar.",
-    "Al pedir apertura/cierre, los botones quedan primero y a la vista — elegir la cátedra pasó a ser un paso opcional más abajo, para no frenar a quien tiene apuro.",
   ]},
 ];
 // se mantiene por compatibilidad con el resto del código, siempre apunta a la version mas nueva
@@ -785,11 +780,7 @@ function isSuperuser(u) { return !!(u && u.name && u.name.toLowerCase() === SUPE
 function hasPermission(u, cap) {
   if (!u) return false;
   if (isSuperuser(u)) return true; // el superusuario puede todo, sin necesidad de otorgarselo
-  // se chequea contra el dato mas fresco (no la copia que se guardo en el momento del login),
-  // asi un permiso otorgado por el superusuario aplica al toque, sin que haga falta reingresar.
-  const live = data && data.staff && data.staff[u.name];
-  const perms = (live && live.permisosExtra) || u.permisosExtra || [];
-  return perms.includes(cap);
+  return !!(u.permisosExtra && u.permisosExtra.includes(cap));
 }
 
 // las catedras sin turno/dia cargado siguen mostrandose siempre (compatibilidad con lo ya cargado).
@@ -1504,14 +1495,9 @@ function openCatedraSheet(id) {
 
 /* ---------- detalle de puerta ---------- */
 let selectedCatedra = null, markCleanChecked = false;
-// estos ids son los fondos de las distintas "hojas" modales que se dibujan en #detail-root.
-// si cualquiera de estas está abierta, renderDoorDetail no tiene que pisarla — sino, cualquier
-// actualización de datos en tiempo real (de cualquier usuario, en cualquier parte de la app)
-// las cerraba solas antes de que se llegaran a leer.
-const OTHER_MODAL_IDS = ["all-notes-bg", "version-popup-bg", "full-changelog-bg", "staff-sheet-bg", "cat-sheet-bg", "note-sheet-bg"];
 function renderDoorDetail() {
   const root = document.getElementById("detail-root");
-  if (OTHER_MODAL_IDS.some(id => document.getElementById(id))) return;
+  if (document.getElementById("all-notes-bg")) return;
   if (!selectedDoorId || !data.doors[selectedDoorId]) { if (!noteDraftIds) root.innerHTML = ""; return; }
   const d = data.doors[selectedDoorId];
   const pr = d.pendingRequest;
@@ -1536,26 +1522,22 @@ function renderDoorDetail() {
       </div>` : ""}
     ${user.role==="jefe" ? `
       <p class="mono" style="font-size:11px;color:var(--ink-soft);margin-bottom:6px;">PEDIR AL PERSONAL DEL PISO</p>
-      <p id="cat-selected-label" style="font-size:11px;color:var(--brass);font-weight:600;margin:0 0 8px;"></p>
-      <div style="display:flex;gap:8px;margin-bottom:12px;">
-        <button id="det-req-open" ${pr?.type==="open"?"disabled":""} style="flex:1;padding:10px;border-radius:6px;background:var(--green-soft);font-size:13px;font-weight:600;opacity:${pr?.type==="open"?0.5:1};">🚪 Pedir apertura</button>
-        <button id="det-req-closed" ${pr?.type==="closed"?"disabled":""} style="flex:1;padding:10px;border-radius:6px;background:var(--red-soft);font-size:13px;font-weight:600;opacity:${pr?.type==="closed"?0.5:1};">🚪 Pedir cierre</button>
-      </div>
-      <details style="margin-bottom:16px;">
-        <summary style="font-size:11px;color:var(--ink-soft);cursor:pointer;">¿De qué cátedra es? (opcional, tocá para elegir)</summary>
-        <div style="margin-top:10px;">
-          ${catedras.length ? `<div id="det-catedras" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">${catedras.map(c=>{ const aulas = catedraAulas(c); return `<button class="chip det-cat" data-cat="${esc(catedraLabel(c))}">${esc(catedraLabel(c))}${aulas.length?` (${aulas.map(a=>esc(aulaLabel(a))).join(", ")})`:""}</button>`; }).join("")}</div>` : ""}
-          ${totalCatedras > catedras.length ? `<p style="font-size:10px;color:var(--ink-soft);margin:0 0 6px;">Hay ${totalCatedras - catedras.length} cátedra(s) más cargadas para otro turno/día — si es una de esas, escribila de nuevo abajo.</p>` : ""}
-          <div style="position:relative;display:flex;gap:6px;margin-bottom:4px;">
-            <div style="flex:1;position:relative;">
-              <input id="new-cat-inline" placeholder="¿No está en la lista? Escribila acá" autocomplete="off" style="width:100%;border:1px solid #D8CFB8;border-radius:6px;padding:7px 10px;font-size:12px;" />
-              <div id="new-cat-inline-sug" class="hidden" style="position:absolute;left:0;right:0;top:100%;background:#fff;border:1px solid #D8CFB8;border-radius:6px;max-height:150px;overflow-y:auto;z-index:5;margin-top:2px;"></div>
-            </div>
-            <button id="new-cat-inline-btn" style="background:var(--ink);color:#F7F4EC;padding:0 12px;border-radius:6px;font-size:12px;font-weight:600;">+</button>
-          </div>
-          ${!hasPermission(user,"gestionCatedras") ? `<p style="font-size:10px;color:var(--ink-soft);margin:2px 0 0;">Esta cátedra queda guardada solo en este pedido, no se suma al catálogo general.</p>` : ""}
+      <p style="font-size:11px;color:var(--ink-soft);margin-bottom:4px;">Cátedra (opcional)</p>
+      ${catedras.length ? `<div id="det-catedras" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">${catedras.map(c=>{ const aulas = catedraAulas(c); return `<button class="chip det-cat" data-cat="${esc(catedraLabel(c))}">${esc(catedraLabel(c))}${aulas.length?` (${aulas.map(a=>esc(aulaLabel(a))).join(", ")})`:""}</button>`; }).join("")}</div>` : ""}
+      ${totalCatedras > catedras.length ? `<p style="font-size:10px;color:var(--ink-soft);margin:0 0 6px;">Hay ${totalCatedras - catedras.length} cátedra(s) más cargadas para otro turno/día — si es una de esas, escribila de nuevo abajo.</p>` : ""}
+      <div style="position:relative;display:flex;gap:6px;margin-bottom:4px;">
+        <div style="flex:1;position:relative;">
+          <input id="new-cat-inline" placeholder="¿No está en la lista? Escribila acá" autocomplete="off" style="width:100%;border:1px solid #D8CFB8;border-radius:6px;padding:7px 10px;font-size:12px;" />
+          <div id="new-cat-inline-sug" class="hidden" style="position:absolute;left:0;right:0;top:100%;background:#fff;border:1px solid #D8CFB8;border-radius:6px;max-height:150px;overflow-y:auto;z-index:5;margin-top:2px;"></div>
         </div>
-      </details>` : ""}
+        <button id="new-cat-inline-btn" style="background:var(--ink);color:#F7F4EC;padding:0 12px;border-radius:6px;font-size:12px;font-weight:600;">+</button>
+      </div>
+      ${!hasPermission(user,"gestionCatedras") ? `<p style="font-size:10px;color:var(--ink-soft);margin:2px 0 6px;">Esta cátedra queda guardada solo en este pedido, no se suma al catálogo general.</p>` : ""}
+      <p id="cat-selected-label" style="font-size:11px;color:var(--brass);font-weight:600;margin:4px 0 8px;"></p>
+      <div style="display:flex;gap:8px;margin-bottom:16px;">
+        <button id="det-req-open" ${pr?.type==="open"?"disabled":""} style="flex:1;padding:8px;border-radius:6px;background:var(--green-soft);font-size:13px;font-weight:600;opacity:${pr?.type==="open"?0.5:1};">🚪 Pedir apertura</button>
+        <button id="det-req-closed" ${pr?.type==="closed"?"disabled":""} style="flex:1;padding:8px;border-radius:6px;background:var(--red-soft);font-size:13px;font-weight:600;opacity:${pr?.type==="closed"?0.5:1};">🚪 Pedir cierre</button>
+      </div>` : ""}
     <p class="mono" style="font-size:11px;color:var(--ink-soft);margin-bottom:6px;">YA LO HICE CON LA LLAVE — MARCAR</p>
     <p style="font-size:11px;color:var(--ink-soft);margin-bottom:8px;">Usalo también si te lo pidieron por handy, sin pasar por una solicitud del sistema.</p>
     <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:12px;color:var(--ink-soft);">
