@@ -30,6 +30,17 @@ messaging.onBackgroundMessage((payload) => {
   });
 });
 
+// al tocar la notificación, la cierra y abre la app (o la enfoca, si ya está abierta en otra pestaña)
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
+      for (const client of list) { if ("focus" in client) return client.focus(); }
+      if (self.clients.openWindow) return self.clients.openWindow("./");
+    })
+  );
+});
+
 /* ======================================================================================= */
 /* De acá para abajo: lo que antes era el archivo sw.js aparte (cacheo para que la app       */
 /* funcione como PWA instalable). Se unificó todo en este único service worker porque tener  */
