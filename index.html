@@ -107,7 +107,7 @@ const ZONES = [
 ];
 const DELAY_MS = 15 * 60 * 1000;
 
-const APP_VERSION = "1.15.2";
+const APP_VERSION = "1.15.3";
 const VERSION_HISTORY = [
   { version: "1.6.0", changes: [
     "Arreglado un error que dejaba de guardar cambios después de contradecir una solicitud (afectaba solo a esas aulas puntuales).",
@@ -181,6 +181,10 @@ const VERSION_HISTORY = [
     "Al pedir apertura/cierre, la lista de cátedras ahora filtra también por el aula — antes mostraba todas las del turno y el día, sin importar el aula.",
     "Ahora se puede cargar más de una cátedra con el mismo nombre (por ejemplo, la misma persona con aulas distintas otro día) — antes quedaba bloqueado sin aviso.",
   ]},
+  { version: "1.15.3", changes: [
+    "Arreglado: el sonido propio de la app (los 3 beeps de los avisos con la app abierta) podía quedar silenciado por el navegador al dispararse solo, sin un toque directo — ahora se destraba con el primer toque en pantalla.",
+    "Subido el volumen de ese sonido propio.",
+  ]},
 ];
 // se mantiene por compatibilidad con el resto del código, siempre apunta a la version mas nueva
 const CHANGELOG = VERSION_HISTORY[VERSION_HISTORY.length - 1].changes;
@@ -193,14 +197,28 @@ function elapsed(ts){ const m=Math.floor((now()-ts)/60000); if(m<1) return "reci
 function esc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 /* ---------- sonido / vibración / notificación ---------- */
+// los navegadores bloquean el sonido que no viene de un toque directo del usuario (para evitar
+// autoplay molesto). Como nuestros avisos se disparan solos (chequeos automáticos, no un click),
+// hay que "desbloquear" el audio en el primer toque que el usuario haga en la pantalla, y despues
+// reusar ese mismo contexto siempre — crear uno nuevo cada vez vuelve a quedar bloqueado.
+let audioCtx = null;
+function ensureAudioContext() {
+  if (!audioCtx) { try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return null; } }
+  if (audioCtx.state === "suspended") audioCtx.resume().catch(()=>{});
+  return audioCtx;
+}
+document.addEventListener("click", () => ensureAudioContext(), { once: true });
+document.addEventListener("touchend", () => ensureAudioContext(), { once: true });
+
 function playAlert() {
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = ensureAudioContext();
+    if (!ctx) return;
     const beep = (start) => {
       const osc = ctx.createOscillator(), gain = ctx.createGain();
       osc.type = "sine"; osc.frequency.value = 880;
       gain.gain.setValueAtTime(0.001, start);
-      gain.gain.exponentialRampToValueAtTime(0.35, start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.9, start + 0.02);
       gain.gain.exponentialRampToValueAtTime(0.001, start + 0.18);
       osc.connect(gain); gain.connect(ctx.destination);
       osc.start(start); osc.stop(start + 0.2);
