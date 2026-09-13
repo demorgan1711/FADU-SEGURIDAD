@@ -107,7 +107,7 @@ const ZONES = [
 ];
 const DELAY_MS = 15 * 60 * 1000;
 
-const APP_VERSION = "1.15.3";
+const APP_VERSION = "1.15.4";
 const VERSION_HISTORY = [
   { version: "1.6.0", changes: [
     "Arreglado un error que dejaba de guardar cambios después de contradecir una solicitud (afectaba solo a esas aulas puntuales).",
@@ -184,6 +184,9 @@ const VERSION_HISTORY = [
   { version: "1.15.3", changes: [
     "Arreglado: el sonido propio de la app (los 3 beeps de los avisos con la app abierta) podía quedar silenciado por el navegador al dispararse solo, sin un toque directo — ahora se destraba con el primer toque en pantalla.",
     "Subido el volumen de ese sonido propio.",
+  ]},
+  { version: "1.15.4", changes: [
+    "Arreglado: si estabas cargando una cátedra, una nota, o cualquier formulario, y mientras tanto alguien más marcaba una puerta en otro lado, se perdía lo que estabas escribiendo. Ahora la pantalla espera a que termines antes de actualizarse.",
   ]},
 ];
 // se mantiene por compatibilidad con el resto del código, siempre apunta a la version mas nueva
@@ -974,6 +977,26 @@ function bindPlates(root) {
 }
 
 /* ---------- render principal ---------- */
+// si el usuario tiene el foco en un campo (escribiendo, tocando un chip) DENTRO del contenedor dado,
+// no hay que regenerar ese contenedor por una actualización de datos que llega de otro lado — sino,
+// se le borra lo que estaba completando (esto le pasaba a Bedelia cargando cátedras, o al cargar una
+// nota, si alguien más marcaba una puerta mientras tanto).
+function isEditingWithin(containerId) {
+  const el = document.activeElement;
+  if (!el || el === document.body) return false;
+  if (!["INPUT","TEXTAREA","SELECT"].includes(el.tagName)) return false;
+  const container = document.getElementById(containerId);
+  return !!(container && container.contains(el));
+}
+// apenas se deja de tocar/escribir adentro del contenido de la pestaña, se refresca una vez para
+// que se vea al día — sin esto, podía quedar con datos viejos hasta el próximo cambio en la base.
+document.addEventListener("focusout", (e) => {
+  const contentRoot = document.getElementById("content-root");
+  if (contentRoot && contentRoot.contains(e.target)) setTimeout(render, 60);
+  const detailRoot = document.getElementById("detail-root");
+  if (detailRoot && detailRoot.contains(e.target)) setTimeout(renderDoorDetail, 60);
+});
+
 function render() {
   if (!loaded) return;
   if (!user) { renderLogin(); return; }
@@ -987,13 +1010,15 @@ function render() {
 
   const root = document.getElementById("content-root");
   root.style.paddingBottom = selectionMode ? "230px" : "76px";
-  if (tab==="inicio") root.innerHTML = renderInicio(allDoors, pendingList);
-  if (tab==="sectores") root.innerHTML = renderSectores(allDoors);
-  if (tab==="solicitudes") root.innerHTML = renderSolicitudes(pendingList);
-  if (tab==="historial") root.innerHTML = renderHistorial();
-  if (tab==="personal" && (user.role==="jefe" || isSuperuser(user))) root.innerHTML = renderPersonal();
-  bindTabHandlers(root);
-  bindPlates(root);
+  if (!isEditingWithin("content-root")) {
+    if (tab==="inicio") root.innerHTML = renderInicio(allDoors, pendingList);
+    if (tab==="sectores") root.innerHTML = renderSectores(allDoors);
+    if (tab==="solicitudes") root.innerHTML = renderSolicitudes(pendingList);
+    if (tab==="historial") root.innerHTML = renderHistorial();
+    if (tab==="personal" && (user.role==="jefe" || isSuperuser(user))) root.innerHTML = renderPersonal();
+    bindTabHandlers(root);
+    bindPlates(root);
+  }
 
   renderSelectionBar(pendingList);
   renderDoorDetail();
@@ -1539,6 +1564,7 @@ function renderDoorDetail() {
   const root = document.getElementById("detail-root");
   if (OTHER_MODAL_IDS.some(id => document.getElementById(id))) return;
   if (!selectedDoorId || !data.doors[selectedDoorId]) { if (!noteDraftIds) root.innerHTML = ""; return; }
+  if (isEditingWithin("detail-root")) return; // no pisar el contenido mientras esta escribiendo/tocando adentro
   const d = data.doors[selectedDoorId];
   const pr = d.pendingRequest;
   const delayed = pr && (now()-pr.requestedAt>DELAY_MS);
