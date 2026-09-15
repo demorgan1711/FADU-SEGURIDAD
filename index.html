@@ -107,7 +107,7 @@ const ZONES = [
 ];
 const DELAY_MS = 15 * 60 * 1000;
 
-const APP_VERSION = "1.15.4";
+const APP_VERSION = "1.15.5";
 const VERSION_HISTORY = [
   { version: "1.6.0", changes: [
     "Arreglado un error que dejaba de guardar cambios después de contradecir una solicitud (afectaba solo a esas aulas puntuales).",
@@ -187,6 +187,9 @@ const VERSION_HISTORY = [
   ]},
   { version: "1.15.4", changes: [
     "Arreglado: si estabas cargando una cátedra, una nota, o cualquier formulario, y mientras tanto alguien más marcaba una puerta en otro lado, se perdía lo que estabas escribiendo. Ahora la pantalla espera a que termines antes de actualizarse.",
+  ]},
+  { version: "1.15.5", changes: [
+    "Arreglado: el cambio anterior se pasaba de la raya y borraba lo escrito al pasar de un campo a otro dentro del mismo formulario (por ejemplo, al elegir un aula o un turno) — ya quedó corregido, ahora solo protege contra cambios de otras personas.",
   ]},
 ];
 // se mantiene por compatibilidad con el resto del código, siempre apunta a la version mas nueva
@@ -988,14 +991,6 @@ function isEditingWithin(containerId) {
   const container = document.getElementById(containerId);
   return !!(container && container.contains(el));
 }
-// apenas se deja de tocar/escribir adentro del contenido de la pestaña, se refresca una vez para
-// que se vea al día — sin esto, podía quedar con datos viejos hasta el próximo cambio en la base.
-document.addEventListener("focusout", (e) => {
-  const contentRoot = document.getElementById("content-root");
-  if (contentRoot && contentRoot.contains(e.target)) setTimeout(render, 60);
-  const detailRoot = document.getElementById("detail-root");
-  if (detailRoot && detailRoot.contains(e.target)) setTimeout(renderDoorDetail, 60);
-});
 
 function render() {
   if (!loaded) return;
