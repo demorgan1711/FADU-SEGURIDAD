@@ -56,7 +56,10 @@
         <p class="display" style="font-size:18px;font-weight:700;margin:0;">Control Seguridad FADU</p>
         <p id="user-sub" style="font-size:12px;opacity:.75;margin:2px 0 0;"></p>
       </div>
-      <button id="btn-logout" style="color:#F7F4EC;font-size:20px;">⎋</button>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <button id="btn-shift-action" class="hidden" style="color:#F7F4EC;font-size:11px;border:1px solid rgba(255,255,255,0.5);padding:5px 9px;border-radius:6px;white-space:nowrap;"></button>
+        <button id="btn-logout" style="color:#F7F4EC;font-size:20px;">⎋</button>
+      </div>
     </div>
     <div id="save-error" class="hidden" style="font-size:11px;color:var(--red);text-align:center;padding:6px 12px;">No se pudo guardar el último cambio. Revisá tu conexión.</div>
     <div id="content-root" style="padding:14px 16px;"></div>
@@ -107,7 +110,7 @@ const ZONES = [
 ];
 const DELAY_MS = 15 * 60 * 1000;
 
-const APP_VERSION = "1.15.5";
+const APP_VERSION = "1.16.3";
 const VERSION_HISTORY = [
   { version: "1.6.0", changes: [
     "Arreglado un error que dejaba de guardar cambios después de contradecir una solicitud (afectaba solo a esas aulas puntuales).",
@@ -190,6 +193,17 @@ const VERSION_HISTORY = [
   ]},
   { version: "1.15.5", changes: [
     "Arreglado: el cambio anterior se pasaba de la raya y borraba lo escrito al pasar de un campo a otro dentro del mismo formulario (por ejemplo, al elegir un aula o un turno) — ya quedó corregido, ahora solo protege contra cambios de otras personas.",
+  ]},
+  { version: "1.16.3", changes: [
+    "Arreglado de raíz: \"llave en poder de\" mostraba nombres sin relación real con esa puerta. Ahora los jefes eligen quién tiene la llave con un desplegable (filtrado al personal de Pisos de su mismo turno) al marcar una puerta — Pisos no ve este selector, se asigna solo. Si no hay nadie, dice \"Sin nadie asignado a la llave\".",
+    "Elegir a alguien en ese desplegable que todavía no tenía ese piso asignado se lo asigna en el momento (asignación express), sin tener que ir a Personal.",
+    "Los jefes ahora pueden marcar puertas directamente (individual y en bloque), además de pedir apertura/cierre — para cubrir los casos que llegan por handy.",
+    "Al abrir el detalle de una puerta, si tiene cátedras asociadas se ven de un vistazo arriba de todo, como chips, filtradas por turno y día — y se pueden tocar para elegirlas directo al pedir apertura/cierre.",
+    "El desplegable de cátedra (para las que no aparecen de un vistazo) recuerda si lo dejaste abierto o cerrado, y aplica lo mismo a la próxima puerta que toques.",
+    "Nuevo buscador en Personal → Cátedras para encontrarlas más rápido.",
+    "Nuevo botón para que el personal de Pisos abandone su turno (se desasigna sus propios pisos).",
+    "Nuevo botón para que los jefes desasignen a todo el personal de Pisos de una sola vez.",
+    "Al cerrar sesión un jefe, si hay gente de Pisos con pisos asignados, se le pregunta si quiere desasignarlos antes de salir.",
   ]},
 ];
 // se mantiene por compatibilidad con el resto del código, siempre apunta a la version mas nueva
@@ -320,7 +334,7 @@ function startNoteChecker() {
 function buildInitialDoors() {
   const doors = {};
   const add = (id, label, sector, sectorLabel, type, routine, hasTV, excludeFromStats) => {
-    doors[id] = { id, label, sector, sectorLabel, type, status: "closed", keyHolder: null, pendingRequest: null, routine, hasTV: !!hasTV, clean: false, anomalies: [], excludeFromStats: !!excludeFromStats };
+    doors[id] = { id, label, sector, sectorLabel, type, status: "closed", keyHolders: [], pendingRequest: null, routine, hasTV: !!hasTV, clean: false, anomalies: [], excludeFromStats: !!excludeFromStats };
   };
   // Subsuelo: Aula Magna + aulas 1 a 4
   add("SS-MAGNA", "Aula Magna", "SS", "Subsuelo", "aula", true);
@@ -387,10 +401,13 @@ function reconcileDoors(storedDoors) {
     const c = canonical[id];
     const s = storedDoors[id];
     const pr = s && s.pendingRequest ? { ...s.pendingRequest, catedra: s.pendingRequest.catedra || null } : (s ? s.pendingRequest : c.pendingRequest);
+    // "keyHolder" (texto, uno solo) es el formato viejo; "keyHolders" (lista) es el nuevo.
+    let keyHolders = c.keyHolders;
+    if (s) { keyHolders = Array.isArray(s.keyHolders) ? s.keyHolders : (s.keyHolder ? [s.keyHolder] : []); }
     result[id] = {
       ...c,
       status: s ? s.status : c.status,
-      keyHolder: s ? s.keyHolder : c.keyHolder,
+      keyHolders,
       pendingRequest: pr,
       clean: s ? !!s.clean : c.clean,
       anomalies: s && s.anomalies ? s.anomalies : c.anomalies,
@@ -654,10 +671,39 @@ function loginAs(name, s) {
   document.getElementById("tabs-nav").classList.remove("hidden");
   document.getElementById("tab-btn-personal").classList.toggle("hidden", user.role !== "jefe" && !isSuperuser(user));
   document.getElementById("user-sub").textContent = `${user.name} · ${user.role==="jefe"?"Oficina Seguridad":"Pisos"}`;
+  const shiftBtn = document.getElementById("btn-shift-action");
+  if (user.role === "recorrido") {
+    shiftBtn.textContent = "Abandonar turno";
+    shiftBtn.classList.remove("hidden");
+    shiftBtn.onclick = async () => {
+      if (!confirm("¿Confirmás que querés abandonar tu turno? Se te van a desasignar todos tus pisos y vas a dejar de recibir avisos hasta que un jefe te vuelva a asignar.")) return;
+      await unassignZonesFor([user.name]);
+      user.zones = [];
+    };
+  } else if (user.role === "jefe") {
+    shiftBtn.textContent = "Desasignar Pisos";
+    shiftBtn.classList.remove("hidden");
+    shiftBtn.onclick = async () => {
+      const names = Object.keys(data.staff).filter(n => data.staff[n].role === "recorrido" && (data.staff[n].zones||[]).length);
+      if (!names.length) { alert("No hay nadie de Pisos con pisos asignados ahora mismo."); return; }
+      if (!confirm(`¿Desasignar los pisos de las ${names.length} persona(s) de Pisos que los tienen asignados? Van a dejar de recibir avisos hasta que se les vuelva a asignar.`)) return;
+      await unassignZonesFor(names);
+    };
+  } else {
+    shiftBtn.classList.add("hidden");
+  }
   render();
   checkVersionPopup();
 }
-document.getElementById("btn-logout").onclick = () => { clearSession(); location.reload(); };
+document.getElementById("btn-logout").onclick = async () => {
+  if (user && user.role === "jefe") {
+    const names = Object.keys(data.staff).filter(n => data.staff[n].role === "recorrido" && (data.staff[n].zones||[]).length);
+    if (names.length && confirm(`¿Querés desasignar los pisos de las ${names.length} persona(s) de Pisos antes de salir? (para que no sigan recibiendo avisos si ya terminó el turno)`)) {
+      await unassignZonesFor(names);
+    }
+  }
+  clearSession(); location.reload();
+};
 document.querySelectorAll(".tab-btn").forEach(btn => btn.onclick = () => {
   tab = btn.dataset.tab;
   document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
@@ -670,12 +716,22 @@ function requestChange(doorId, type, catedra) {
   update(prev => ({ ...prev, doors: { ...prev.doors, [doorId]: { ...prev.doors[doorId], pendingRequest: { type, requestedBy: user.name, requestedAt: now(), catedra: catedra || null } } } }));
   selectedDoorId = null; render();
 }
-function markDoor(doorId, status, clean) {
+function markDoor(doorId, status, clean, keyHolders) {
   update(prev => {
     const d = prev.doors[doorId]; const pr = d.pendingRequest;
     const entry = { id:`${doorId}-${now()}`, doorId, doorLabel:d.label, action:status, requestedBy: pr?pr.requestedBy:null, requestedAt: pr?pr.requestedAt:null, catedra: (pr && pr.catedra) ? pr.catedra : null, executedBy:user.name, executedAt: now() };
+    // asignacion express: a quien se elija como tenedor de la llave, si no tenia este piso asignado, se lo asigna en el momento.
+    let staff = prev.staff;
+    if (status === "open" && keyHolders && keyHolders.length) {
+      staff = { ...staff };
+      keyHolders.forEach(name => {
+        const s = staff[name];
+        if (s && !(s.zones||[]).includes(d.sector)) staff[name] = { ...s, zones: [...(s.zones||[]), d.sector] };
+      });
+    }
     return { ...prev,
-      doors: { ...prev.doors, [doorId]: { ...d, status, keyHolder: status==="open"?user.name:null, pendingRequest:null, clean: status==="closed" ? !!clean : false } },
+      staff,
+      doors: { ...prev.doors, [doorId]: { ...d, status, keyHolders: status==="open" ? (keyHolders || []) : [], pendingRequest:null, clean: status==="closed" ? !!clean : false } },
       history: [entry, ...prev.history].slice(0,300) };
   });
   selectedDoorId = null; render();
@@ -691,6 +747,14 @@ function resolveAnomaly(doorId, anomalyId) {
   update(prev => { const d = prev.doors[doorId]; return { ...prev, doors: { ...prev.doors, [doorId]: { ...d, anomalies: (d.anomalies||[]).map(a=>a.id===anomalyId?{...a,resolved:true}:a) } } }; });
 }
 function saveStaff(name, fields) { update(prev => ({ ...prev, staff: { ...prev.staff, [name]: { ...(prev.staff[name]||{}), ...fields } } })); }
+// desasigna los pisos de varias personas de una sola vez, en un solo guardado — se puede esperar
+// (await) a que termine, por ejemplo antes de cerrar sesión, para no cortar el guardado a mitad de camino.
+async function unassignZonesFor(names) {
+  if (!names.length) return;
+  data = { ...data, staff: { ...data.staff, ...Object.fromEntries(names.map(n => [n, { ...data.staff[n], zones: [] }])) } };
+  render();
+  await persist();
+}
 function deleteStaff(name) { update(prev => { const s = {...prev.staff}; delete s[name]; return {...prev, staff:s}; }); }
 function addCatedra(cObj) {
   update(prev => {
@@ -817,6 +881,39 @@ const CAPABILITIES = [
   { id: "gestionCatedras", label: "Gestionar el catálogo general de cátedras (crear, editar, borrar para todos)" },
 ];
 function isSuperuser(u) { return !!(u && u.name && u.name.toLowerCase() === SUPERUSER_NAME); }
+// personal de "Pisos" (recorrido) asignado a un sector, para elegir quien tiene la llave al marcar
+// desplegable para elegir quien(es) tienen la llave — solo lo usan los jefes. Se filtra al personal
+// de Pisos de ese sector que además comparte turno con el jefe logueado (si el jefe no tiene turno
+// cargado, o la persona tampoco, se muestra igual, para no ocultar a nadie por error).
+function keyHolderPickerHTML(id) { return `<div id="${id}"></div>`; }
+function bindKeyHolderPicker(id, sectorIds, initialSelected) {
+  const sectors = Array.isArray(sectorIds) ? sectorIds : [sectorIds];
+  const myTurnos = (user && user.turnos) || [];
+  // se muestra TODO el personal de Pisos del mismo turno, no solo el ya asignado a este sector —
+  // elegir a alguien acá lo asigna al piso en el momento (si no lo estaba ya), sin tener que ir a Personal.
+  const options = Object.keys(data.staff).filter(n => {
+    if (data.staff[n].role !== "recorrido") return false;
+    const t = staffTurnos(data.staff[n]);
+    return !t.length || !myTurnos.length || t.some(x => myTurnos.includes(x));
+  });
+  let selected = [...(initialSelected||[])];
+  const container = document.getElementById(id);
+  const render = () => {
+    container.innerHTML = `
+      ${selected.length ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
+        ${selected.map(n => `<span class="chip active" style="display:inline-flex;align-items:center;gap:5px;">${esc(n)} <button type="button" data-remove-kh="${esc(n)}" style="font-size:13px;line-height:1;">×</button></span>`).join("")}
+      </div>` : ""}
+      <select id="${id}-select" style="width:100%;border:1px solid #D8CFB8;border-radius:8px;padding:9px 12px;font-size:13px;">
+        <option value="">${options.filter(n=>!selected.includes(n)).length ? "+ Elegir y asignar persona..." : (options.length?"Ya elegiste a todos los de tu turno":"No hay nadie de Pisos en tu turno")}</option>
+        ${options.filter(n => !selected.includes(n)).map(n => `<option value="${esc(n)}">${esc(n)}${(data.staff[n].zones||[]).includes(sectors[0])?"":" (se le asigna este piso)"}</option>`).join("")}
+      </select>`;
+    container.querySelectorAll("[data-remove-kh]").forEach(b => b.onclick = () => { selected = selected.filter(x=>x!==b.dataset.removeKh); render(); });
+    const sel = document.getElementById(`${id}-select`);
+    sel.onchange = () => { if (sel.value) { selected = [...selected, sel.value]; render(); } };
+  };
+  render();
+  return { getSelected: () => selected };
+}
 function hasPermission(u, cap) {
   if (!u) return false;
   if (isSuperuser(u)) return true; // el superusuario puede todo, sin necesidad de otorgarselo
@@ -930,15 +1027,24 @@ function bulkRequest(type) {
   update(prev => { const doors = {...prev.doors}; selectedIds.forEach(id => { doors[id] = {...doors[id], pendingRequest:{type, requestedBy:user.name, requestedAt:now(), catedra:null}}; }); return {...prev, doors}; });
   clearSelection();
 }
-function bulkMark(status, clean) {
+function bulkMark(status, clean, keyHolders) {
+  const finalHolders = keyHolders !== undefined ? keyHolders : ((status==="open" && user.role==="recorrido") ? [user.name] : []);
   update(prev => {
     const doors = {...prev.doors}; const entries = [];
+    let staff = prev.staff;
     selectedIds.forEach(id => {
       const d = doors[id]; const pr = d.pendingRequest;
       entries.push({ id:`${id}-${now()}-${Math.random().toString(36).slice(2,6)}`, doorId:id, doorLabel:d.label, action:status, requestedBy:pr?pr.requestedBy:null, requestedAt:pr?pr.requestedAt:null, catedra: (pr && pr.catedra) ? pr.catedra : null, executedBy:user.name, executedAt:now() });
-      doors[id] = { ...d, status, keyHolder: status==="open"?user.name:null, pendingRequest:null, clean: status==="closed" ? !!clean : false };
+      doors[id] = { ...d, status, keyHolders: status==="open" ? finalHolders : [], pendingRequest:null, clean: status==="closed" ? !!clean : false };
+      // asignacion express: a quien se elija como tenedor de la llave, si no tenia este piso asignado, se lo asigna en el momento.
+      if (status === "open" && finalHolders.length) {
+        finalHolders.forEach(name => {
+          const s = staff[name];
+          if (s && !(s.zones||[]).includes(d.sector)) { if (staff===prev.staff) staff = {...staff}; staff[name] = { ...s, zones: [...(s.zones||[]), d.sector] }; }
+        });
+      }
     });
-    return { ...prev, doors, history: [...entries, ...prev.history].slice(0,300) };
+    return { ...prev, staff, doors, history: [...entries, ...prev.history].slice(0,300) };
   });
   clearSelection();
 }
@@ -1201,15 +1307,22 @@ function renderPersonal() {
         </div>
         <button id="new-catedra-btn" class="btn-primary" disabled>+ Agregar cátedra</button>
       </div>
-      ${!catedras.length ? `<p style="font-size:13px;color:var(--ink-soft);">Todavía no cargaste ninguna cátedra.</p>` : `<div style="display:flex;flex-wrap:wrap;gap:8px;">${catedras.map(c=>{
+      ${catedras.length > 5 ? `<input id="catedra-search" placeholder="🔍 Buscar cátedra por nombre, materia o aula..." style="width:100%;border:1px solid #D8CFB8;border-radius:8px;padding:9px 12px;font-size:13px;margin-bottom:10px;" />` : ""}
+      ${!catedras.length ? `<p style="font-size:13px;color:var(--ink-soft);">Todavía no cargaste ninguna cátedra.</p>` : `<div id="catedra-chip-list" style="display:flex;flex-wrap:wrap;gap:8px;">${catedras.map(c=>{
         const turnos = catedraTurnos(c), dias = catedraDias(c), aulas = catedraAulas(c);
         const turnoIcons = turnos.map(t=>({manana:"☀️",tarde:"🌤️",noche:"🌙"}[t])).join("");
         const diasTxt = dias.length ? dias.map(d=>["D","L","M","X","J","V","S"][d]).join("") : "";
         const aulasTxt = aulas.length ? ` (${aulas.map(a=>esc(aulaLabel(a))).join(", ")})` : "";
-        return `<button class="chip" data-edit-catedra="${esc(catedraId(c))}">✎ ${esc(catedraLabel(c))}${aulasTxt}${turnoIcons?` ${turnoIcons}`:""}${diasTxt?` ${diasTxt}`:""}</button>`;
+        const searchTxt = esc(`${catedraLabel(c)} ${aulas.map(a=>aulaLabel(a)).join(" ")}`.toLowerCase());
+        return `<button class="chip catedra-chip" data-search="${searchTxt}" data-edit-catedra="${esc(catedraId(c))}">✎ ${esc(catedraLabel(c))}${aulasTxt}${turnoIcons?` ${turnoIcons}`:""}${diasTxt?` ${diasTxt}`:""}</button>`;
       }).join("")}</div>`}` : `
       <p style="font-size:13px;color:var(--ink-soft);margin-bottom:10px;">No tenés permiso para gestionar el catálogo general de cátedras. Podés cargar una cátedra puntual al pedir apertura/cierre — queda guardada solo en ese pedido.</p>
-      ${!catedras.length ? "" : `<div style="display:flex;flex-wrap:wrap;gap:8px;">${catedras.map(c=>`<span class="chip" style="opacity:.7;">${esc(catedraLabel(c))}</span>`).join("")}</div>`}`;
+      ${catedras.length > 5 ? `<input id="catedra-search" placeholder="🔍 Buscar cátedra por nombre, materia o aula..." style="width:100%;border:1px solid #D8CFB8;border-radius:8px;padding:9px 12px;font-size:13px;margin-bottom:10px;" />` : ""}
+      ${!catedras.length ? "" : `<div id="catedra-chip-list" style="display:flex;flex-wrap:wrap;gap:8px;">${catedras.map(c=>{
+        const aulas = catedraAulas(c);
+        const searchTxt = esc(`${catedraLabel(c)} ${aulas.map(a=>aulaLabel(a)).join(" ")}`.toLowerCase());
+        return `<span class="chip catedra-chip" data-search="${searchTxt}" style="opacity:.7;">${esc(catedraLabel(c))}</span>`;
+      }).join("")}</div>`}`;
 
   const permisosBlock = isSuperuser(user) ? `
     <div style="margin-top:32px;">
@@ -1280,6 +1393,13 @@ function bindTabHandlers(root) {
     if (addBtn) addBtn.onclick = () => openStaffSheet(null);
     root.querySelectorAll("[data-edit-staff]").forEach(b => b.onclick = () => openStaffSheet(b.dataset.editStaff));
     root.querySelectorAll("[data-edit-catedra]").forEach(b => b.onclick = () => openCatedraSheet(b.dataset.editCatedra));
+    const catSearch = document.getElementById("catedra-search");
+    if (catSearch) catSearch.oninput = () => {
+      const q = catSearch.value.trim().toLowerCase();
+      root.querySelectorAll(".catedra-chip").forEach(chip => {
+        chip.style.display = (!q || (chip.dataset.search||"").includes(q)) ? "" : "none";
+      });
+    };
     const ci = document.getElementById("new-catedra-input"), cb = document.getElementById("new-catedra-btn");
     const cMateria = document.getElementById("new-catedra-materia");
     const aulasWidget = document.getElementById("new-catedra-aulas") ? bindMultiAulaPicker("new-catedra-aulas", []) : null;
@@ -1356,7 +1476,27 @@ function renderSelectionBar(pendingList) {
   div.id = "selection-bar-root";
   div.className = "fixed";
   div.style.cssText = "position:fixed;bottom:0;left:0;right:0;display:flex;justify-content:center;";
-  div.innerHTML = `<div style="max-width:480px;width:100%;background:#fff;border-top:1px solid #D8CFB8;padding:10px 14px 14px;">
+  // union de sectores de todo lo seleccionado, para filtrar el desplegable de "quien tiene la llave"
+  const sectorsInSel = [...new Set(selectedIds.map(id => data.doors[id]?.sector).filter(Boolean))];
+  const markSectionJefe = `
+      <p style="font-size:11px;color:var(--ink-soft);margin:4px 0;">¿Quién tiene la llave? (opcional)</p>
+      ${keyHolderPickerHTML("sel-keyholders")}
+      <label style="display:flex;align-items:center;gap:8px;margin:8px 0;font-size:12px;color:var(--ink-soft);">
+        <input type="checkbox" id="sel-clean" /> Quedaron cerradas y limpias (limpieza no las necesita revisar)
+      </label>
+      <div style="display:flex;gap:8px;margin-bottom:8px;">
+        <button id="sel-mark-open" style="flex:1;padding:8px;border-radius:6px;background:var(--green);color:#fff;font-size:12px;font-weight:700;">Marcar abiertas</button>
+        <button id="sel-mark-closed" style="flex:1;padding:8px;border-radius:6px;background:var(--red);color:#fff;font-size:12px;font-weight:700;">Marcar cerradas</button>
+      </div>`;
+  const markSectionPisos = `
+      <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:12px;color:var(--ink-soft);">
+        <input type="checkbox" id="sel-clean" /> Quedaron cerradas y limpias (limpieza no las necesita revisar)
+      </label>
+      <div style="display:flex;gap:8px;margin-bottom:8px;">
+        <button id="sel-mark-open" style="flex:1;padding:8px;border-radius:6px;background:var(--green);color:#fff;font-size:12px;font-weight:700;">Marcar abiertas</button>
+        <button id="sel-mark-closed" style="flex:1;padding:8px;border-radius:6px;background:var(--red);color:#fff;font-size:12px;font-weight:700;">Marcar cerradas</button>
+      </div>`;
+  div.innerHTML = `<div style="max-width:480px;width:100%;background:#fff;border-top:1px solid #D8CFB8;padding:10px 14px 14px;max-height:70vh;overflow-y:auto;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
         <span style="font-size:13px;font-weight:700;">${selectedIds.length} seleccionada${selectedIds.length===1?"":"s"}</span>
         <button id="sel-cancel" style="font-size:12px;color:var(--ink-soft);">✕ Cancelar</button>
@@ -1364,20 +1504,25 @@ function renderSelectionBar(pendingList) {
       ${user.role==="jefe" ? `<div style="display:flex;gap:8px;margin-bottom:8px;">
         <button id="sel-req-open" style="flex:1;padding:8px;border-radius:6px;background:var(--green-soft);font-size:12px;font-weight:600;">Pedir apertura</button>
         <button id="sel-req-closed" style="flex:1;padding:8px;border-radius:6px;background:var(--red-soft);font-size:12px;font-weight:600;">Pedir cierre</button>
-      </div>` : ""}
-      <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:12px;color:var(--ink-soft);">
-        <input type="checkbox" id="sel-clean" /> Quedaron cerradas y limpias (limpieza no las necesita revisar)
-      </label>
-      <div style="display:flex;gap:8px;margin-bottom:8px;">
-        <button id="sel-mark-open" style="flex:1;padding:8px;border-radius:6px;background:var(--green);color:#fff;font-size:12px;font-weight:700;">Marcar abiertas</button>
-        <button id="sel-mark-closed" style="flex:1;padding:8px;border-radius:6px;background:var(--red);color:#fff;font-size:12px;font-weight:700;">Marcar cerradas</button>
       </div>
+      <details style="margin-bottom:8px;">
+        <summary style="font-size:11px;color:var(--ink-soft);cursor:pointer;">¿Ya lo hicieron por handy? Marcar directamente</summary>
+        <div style="margin-top:8px;">${markSectionJefe}</div>
+      </details>` : markSectionPisos}
       <button id="sel-add-note" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--brass);font-size:12px;font-weight:600;">📝 Agregar nota para estas aulas</button>
     </div>`;
   document.body.appendChild(div);
   document.getElementById("sel-cancel").onclick = clearSelection;
-  document.getElementById("sel-mark-open").onclick = () => { const doorsArr = selectedIds.map(id=>data.doors[id]); if (confirmIfMismatch(doorsArr, "open")) bulkMark("open"); };
-  document.getElementById("sel-mark-closed").onclick = () => { const doorsArr = selectedIds.map(id=>data.doors[id]); if (confirmIfMismatch(doorsArr, "closed")) bulkMark("closed", document.getElementById("sel-clean").checked); };
+  // jefes: eligen quien tiene la llave con el desplegable. Pisos: no ven nada de esto, se asignan solos.
+  const selKhWidget = document.getElementById("sel-keyholders") ? bindKeyHolderPicker("sel-keyholders", sectorsInSel, []) : null;
+  const markOpenSelBtn = document.getElementById("sel-mark-open"), markClosedSelBtn = document.getElementById("sel-mark-closed");
+  if (markOpenSelBtn) markOpenSelBtn.onclick = () => {
+    const doorsArr = selectedIds.map(id=>data.doors[id]);
+    if (!confirmIfMismatch(doorsArr, "open")) return;
+    const holders = selKhWidget ? selKhWidget.getSelected() : (user.role === "recorrido" ? [user.name] : []);
+    bulkMark("open", false, holders);
+  };
+  if (markClosedSelBtn) markClosedSelBtn.onclick = () => { const doorsArr = selectedIds.map(id=>data.doors[id]); if (confirmIfMismatch(doorsArr, "closed")) bulkMark("closed", document.getElementById("sel-clean").checked); };
   const ro = document.getElementById("sel-req-open"), rc = document.getElementById("sel-req-closed");
   if (ro) ro.onclick = () => { const doorsArr = selectedIds.map(id=>data.doors[id]); if (confirmIfAlreadyInState(doorsArr, "open")) bulkRequest("open"); };
   if (rc) rc.onclick = () => { const doorsArr = selectedIds.map(id=>data.doors[id]); if (confirmIfAlreadyInState(doorsArr, "closed")) bulkRequest("closed"); };
@@ -1549,7 +1694,7 @@ function openCatedraSheet(id) {
 }
 
 /* ---------- detalle de puerta ---------- */
-let selectedCatedra = null, markCleanChecked = false;
+let selectedCatedra = null, markCleanChecked = false, catedraDetailsOpen = false;
 // estos ids son los fondos de las distintas "hojas" modales que se dibujan en #detail-root.
 // si cualquiera de estas está abierta, renderDoorDetail no tiene que pisarla — sino, cualquier
 // actualización de datos en tiempo real (de cualquier usuario, en cualquier parte de la app)
@@ -1574,7 +1719,24 @@ function renderDoorDetail() {
       <button id="sheet-close" style="font-size:20px;">✕</button>
     </div>
     <p style="margin:0 0 4px;font-weight:600;">Estado actual: ${d.status==="open"?"Abierta 🟢":"Cerrada 🔴"}</p>
-    <p style="font-size:13px;color:var(--ink-soft);margin:0 0 16px;">🔑 ${d.keyHolder?`Llave en poder de ${esc(d.keyHolder)}`:"Llave sin registrar"} · ${esc(d.sectorLabel)}</p>
+    <p style="font-size:13px;color:var(--ink-soft);margin:0 0 16px;">🔑 ${(d.keyHolders&&d.keyHolders.length)?`Llave en poder de ${d.keyHolders.map(esc).join(", ")}`:"Sin nadie asignado a la llave"} · ${esc(d.sectorLabel)}</p>
+    ${(() => {
+      const catedrasDeEstaAula = catedrasForToday(d.id);
+      if (!catedrasDeEstaAula.length) return "";
+      return `<div class="card" style="margin-bottom:16px;background:var(--brass-soft);">
+        <p class="mono" style="font-size:10px;color:var(--ink-soft);margin:0 0 6px;">CÁTEDRAS QUE USAN ESTA AULA${(user.role==="jefe"||isSuperuser(user))?" (tocá para elegirla al pedir)":""}</p>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;">
+          ${catedrasDeEstaAula.map(c => {
+            const turnoIcons = catedraTurnos(c).map(t=>({manana:"☀️",tarde:"🌤️",noche:"🌙"}[t])).join("");
+            const dias = catedraDias(c);
+            const diasTxt = dias.length ? dias.map(dd=>["D","L","M","X","J","V","S"][dd]).join("") : "todos";
+            const label = esc(catedraLabel(c));
+            if (user.role==="jefe"||isSuperuser(user)) return `<button type="button" class="chip det-cat" data-cat="${label}" style="background:#fff;">${label} ${turnoIcons} <span style="color:var(--ink-soft);">(${diasTxt})</span></button>`;
+            return `<span class="chip" style="background:#fff;">${label} ${turnoIcons} <span style="color:var(--ink-soft);">(${diasTxt})</span></span>`;
+          }).join("")}
+        </div>
+      </div>`;
+    })()}
     ${d.hasTV ? `<div class="card" style="margin-bottom:16px;background:#F1ECDD;"><p style="font-size:12px;margin:0;">📺 Tiene TV — extremar el cuidado al cerrar.</p></div>` : ""}
     ${d.status==="closed" && d.clean ? `<div class="card" style="margin-bottom:16px;background:var(--green-soft);"><p style="font-size:12px;margin:0;">✅ Quedó cerrada y limpia — limpieza no necesita revisarla.</p></div>` : ""}
     ${pr ? `<div class="card" style="margin-bottom:16px;background:${pr.type==="open"?"var(--green-soft)":"var(--red-soft)"};">
@@ -1588,7 +1750,7 @@ function renderDoorDetail() {
         <button id="det-req-open" ${pr?.type==="open"?"disabled":""} style="flex:1;padding:10px;border-radius:6px;background:var(--green-soft);font-size:13px;font-weight:600;opacity:${pr?.type==="open"?0.5:1};">🚪 Pedir apertura</button>
         <button id="det-req-closed" ${pr?.type==="closed"?"disabled":""} style="flex:1;padding:10px;border-radius:6px;background:var(--red-soft);font-size:13px;font-weight:600;opacity:${pr?.type==="closed"?0.5:1};">🚪 Pedir cierre</button>
       </div>
-      <details style="margin-bottom:16px;">
+      <details id="det-cat-details" style="margin-bottom:16px;" ${catedraDetailsOpen?"open":""}>
         <summary style="font-size:11px;color:var(--ink-soft);cursor:pointer;">¿De qué cátedra es? (opcional, tocá para elegir)</summary>
         <div style="margin-top:10px;">
           ${catedras.length ? `<div id="det-catedras" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">${catedras.map(c=>{ const aulas = catedraAulas(c); return `<button class="chip det-cat" data-cat="${esc(catedraLabel(c))}">${esc(catedraLabel(c))}${aulas.length?` (${aulas.map(a=>esc(aulaLabel(a))).join(", ")})`:""}</button>`; }).join("")}</div>` : ""}
@@ -1605,7 +1767,10 @@ function renderDoorDetail() {
       </details>` : ""}
     <p class="mono" style="font-size:11px;color:var(--ink-soft);margin-bottom:6px;">YA LO HICE CON LA LLAVE — MARCAR</p>
     <p style="font-size:11px;color:var(--ink-soft);margin-bottom:8px;">Usalo también si te lo pidieron por handy, sin pasar por una solicitud del sistema.</p>
-    <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:12px;color:var(--ink-soft);">
+    ${(user.role==="jefe"||isSuperuser(user)) ? `
+    <p style="font-size:11px;color:var(--ink-soft);margin-bottom:4px;">¿Quién tiene la llave? (opcional)</p>
+    ${keyHolderPickerHTML("det-keyholders")}` : ""}
+    <label style="display:flex;align-items:center;gap:8px;margin:8px 0;font-size:12px;color:var(--ink-soft);">
       <input type="checkbox" id="det-clean" /> Quedó cerrada y limpia (limpieza no la necesita revisar)
     </label>
     <div style="display:flex;gap:8px;margin-bottom:16px;">
@@ -1630,8 +1795,17 @@ function renderDoorDetail() {
   const close = () => { selectedDoorId = null; selectedCatedra = null; markCleanChecked = false; render(); };
   document.getElementById("sheet-close").onclick = close;
   document.getElementById("sheet-bg").onclick = (e) => { if (e.target.id==="sheet-bg") close(); };
-  document.getElementById("det-mark-open").onclick = () => { if (confirmIfMismatch([d], "open")) markDoor(d.id, "open"); };
-  document.getElementById("det-mark-closed").onclick = () => { if (confirmIfMismatch([d], "closed")) markDoor(d.id, "closed", document.getElementById("det-clean").checked); };
+  const catDetailsEl = document.getElementById("det-cat-details");
+  if (catDetailsEl) catDetailsEl.addEventListener("toggle", () => { catedraDetailsOpen = catDetailsEl.open; });
+  // jefes: eligen quien tiene la llave con el desplegable. Pisos: se asigna a si mismo automaticamente, sin verlo.
+  const detKhWidget = document.getElementById("det-keyholders") ? bindKeyHolderPicker("det-keyholders", d.sector, []) : null;
+  const markOpenBtn = document.getElementById("det-mark-open"), markClosedBtn = document.getElementById("det-mark-closed");
+  if (markOpenBtn) markOpenBtn.onclick = () => {
+    if (!confirmIfMismatch([d], "open")) return;
+    const holders = detKhWidget ? detKhWidget.getSelected() : (user.role === "recorrido" ? [user.name] : []);
+    markDoor(d.id, "open", false, holders);
+  };
+  if (markClosedBtn) markClosedBtn.onclick = () => { if (confirmIfMismatch([d], "closed")) markDoor(d.id, "closed", document.getElementById("det-clean").checked); };
   const ro = document.getElementById("det-req-open"), rc = document.getElementById("det-req-closed");
   if (ro) ro.onclick = () => { if (confirmIfAlreadyInState([d], "open")) requestChange(d.id, "open", selectedCatedra); };
   if (rc) rc.onclick = () => { if (confirmIfAlreadyInState([d], "closed")) requestChange(d.id, "closed", selectedCatedra); };
