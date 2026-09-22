@@ -110,7 +110,7 @@ const ZONES = [
 ];
 const DELAY_MS = 15 * 60 * 1000;
 
-const APP_VERSION = "1.16.3";
+const APP_VERSION = "1.16.4";
 const VERSION_HISTORY = [
   { version: "1.6.0", changes: [
     "Arreglado un error que dejaba de guardar cambios después de contradecir una solicitud (afectaba solo a esas aulas puntuales).",
@@ -204,6 +204,10 @@ const VERSION_HISTORY = [
     "Nuevo botón para que el personal de Pisos abandone su turno (se desasigna sus propios pisos).",
     "Nuevo botón para que los jefes desasignen a todo el personal de Pisos de una sola vez.",
     "Al cerrar sesión un jefe, si hay gente de Pisos con pisos asignados, se le pregunta si quiere desasignarlos antes de salir.",
+  ]},
+  { version: "1.16.4", changes: [
+    "Al ver las cátedras de un aula, si esa cátedra también usa otras aulas, se muestran chiquito al lado (para jefes y para Pisos, según su turno y día).",
+    "Al pedir apertura/cierre con una cátedra elegida, si esa cátedra tiene otras aulas asociadas, se pregunta si también querés pedirlas — para no tener que hacerlo aula por aula.",
   ]},
 ];
 // se mantiene por compatibilidad con el resto del código, siempre apunta a la version mas nueva
@@ -715,6 +719,24 @@ document.querySelectorAll(".tab-btn").forEach(btn => btn.onclick = () => {
 function requestChange(doorId, type, catedra) {
   update(prev => ({ ...prev, doors: { ...prev.doors, [doorId]: { ...prev.doors[doorId], pendingRequest: { type, requestedBy: user.name, requestedAt: now(), catedra: catedra || null } } } }));
   selectedDoorId = null; render();
+}
+// pide el mismo tipo de cambio para varias puertas a la vez, en un solo guardado (por ejemplo, cuando
+// una cátedra usa varias aulas y se piden todas juntas).
+function requestChangeMultiple(doorIds, type, catedra) {
+  update(prev => {
+    const doors = { ...prev.doors };
+    doorIds.forEach(id => { if (doors[id]) doors[id] = { ...doors[id], pendingRequest: { type, requestedBy: user.name, requestedAt: now(), catedra: catedra || null } }; });
+    return { ...prev, doors };
+  });
+  selectedDoorId = null; render();
+}
+// las otras aulas que usa la(s) catedra(s) con este nombre, sin contar la puerta actual — para
+// ofrecer pedirlas juntas.
+function otherAulasForCatedraLabel(label, excludeDoorId) {
+  if (!label) return [];
+  const matching = (data.catedras||[]).filter(c => catedraLabel(c) === label);
+  const allAulas = [...new Set(matching.flatMap(catedraAulas))];
+  return allAulas.filter(a => a !== excludeDoorId && data.doors[a]);
 }
 function markDoor(doorId, status, clean, keyHolders) {
   update(prev => {
@@ -1725,14 +1747,18 @@ function renderDoorDetail() {
       if (!catedrasDeEstaAula.length) return "";
       return `<div class="card" style="margin-bottom:16px;background:var(--brass-soft);">
         <p class="mono" style="font-size:10px;color:var(--ink-soft);margin:0 0 6px;">CÁTEDRAS QUE USAN ESTA AULA${(user.role==="jefe"||isSuperuser(user))?" (tocá para elegirla al pedir)":""}</p>
-        <div style="display:flex;flex-wrap:wrap;gap:6px;">
+        <div style="display:flex;flex-direction:column;gap:6px;">
           ${catedrasDeEstaAula.map(c => {
             const turnoIcons = catedraTurnos(c).map(t=>({manana:"☀️",tarde:"🌤️",noche:"🌙"}[t])).join("");
             const dias = catedraDias(c);
             const diasTxt = dias.length ? dias.map(dd=>["D","L","M","X","J","V","S"][dd]).join("") : "todos";
             const label = esc(catedraLabel(c));
-            if (user.role==="jefe"||isSuperuser(user)) return `<button type="button" class="chip det-cat" data-cat="${label}" style="background:#fff;">${label} ${turnoIcons} <span style="color:var(--ink-soft);">(${diasTxt})</span></button>`;
-            return `<span class="chip" style="background:#fff;">${label} ${turnoIcons} <span style="color:var(--ink-soft);">(${diasTxt})</span></span>`;
+            const otras = catedraAulas(c).filter(a => a !== d.id);
+            const otrasTxt = otras.length ? `<span style="font-size:10px;color:var(--ink-soft);margin-left:6px;">· también: ${otras.map(a=>esc(aulaLabel(a))).join(", ")}</span>` : "";
+            const chip = (user.role==="jefe"||isSuperuser(user))
+              ? `<button type="button" class="chip det-cat" data-cat="${label}" style="background:#fff;align-self:flex-start;">${label} ${turnoIcons} <span style="color:var(--ink-soft);">(${diasTxt})</span></button>`
+              : `<span class="chip" style="background:#fff;align-self:flex-start;">${label} ${turnoIcons} <span style="color:var(--ink-soft);">(${diasTxt})</span></span>`;
+            return `<div>${chip}${otrasTxt}</div>`;
           }).join("")}
         </div>
       </div>`;
@@ -1807,8 +1833,21 @@ function renderDoorDetail() {
   };
   if (markClosedBtn) markClosedBtn.onclick = () => { if (confirmIfMismatch([d], "closed")) markDoor(d.id, "closed", document.getElementById("det-clean").checked); };
   const ro = document.getElementById("det-req-open"), rc = document.getElementById("det-req-closed");
-  if (ro) ro.onclick = () => { if (confirmIfAlreadyInState([d], "open")) requestChange(d.id, "open", selectedCatedra); };
-  if (rc) rc.onclick = () => { if (confirmIfAlreadyInState([d], "closed")) requestChange(d.id, "closed", selectedCatedra); };
+  const requestWithRelated = (type) => {
+    if (!confirmIfAlreadyInState([d], type)) return;
+    const others = otherAulasForCatedraLabel(selectedCatedra, d.id);
+    if (others.length) {
+      const names = others.map(id => aulaLabel(id)).join(", ");
+      const verbo = type==="open" ? "apertura" : "cierre";
+      if (confirm(`La cátedra "${selectedCatedra}" también usa: ${names}. ¿Pedimos la ${verbo} de esas aulas también?`)) {
+        requestChangeMultiple([d.id, ...others], type, selectedCatedra);
+        return;
+      }
+    }
+    requestChange(d.id, type, selectedCatedra);
+  };
+  if (ro) ro.onclick = () => requestWithRelated("open");
+  if (rc) rc.onclick = () => requestWithRelated("closed");
   root.querySelectorAll(".det-cat").forEach(b => b.onclick = () => {
     selectedCatedra = selectedCatedra===b.dataset.cat ? null : b.dataset.cat;
     root.querySelectorAll(".det-cat").forEach(x=>x.classList.toggle("active", x.dataset.cat===selectedCatedra));
