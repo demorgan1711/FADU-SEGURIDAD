@@ -110,7 +110,7 @@ const ZONES = [
 ];
 const DELAY_MS = 15 * 60 * 1000;
 
-const APP_VERSION = "1.16.4";
+const APP_VERSION = "1.17.1";
 const VERSION_HISTORY = [
   { version: "1.6.0", changes: [
     "Arreglado un error que dejaba de guardar cambios después de contradecir una solicitud (afectaba solo a esas aulas puntuales).",
@@ -208,6 +208,15 @@ const VERSION_HISTORY = [
   { version: "1.16.4", changes: [
     "Al ver las cátedras de un aula, si esa cátedra también usa otras aulas, se muestran chiquito al lado (para jefes y para Pisos, según su turno y día).",
     "Al pedir apertura/cierre con una cátedra elegida, si esa cátedra tiene otras aulas asociadas, se pregunta si también querés pedirlas — para no tener que hacerlo aula por aula.",
+  ]},
+  { version: "1.17.0", changes: [
+    "Arreglado: si al pedir apertura/cierre con una cátedra, alguna de sus otras aulas ya está en ese estado (o ya tiene un pedido igual esperando), ya no se vuelve a sugerir.",
+    "Las notas ahora se pueden editar, desde Inicio o desde \"Ver todas\".",
+    "Los jefes pueden fijar una nota como aviso (📌) — se ve siempre, para todos, hasta que alguien la cierra.",
+    "Eliminar una nota para siempre ahora es una acción solo para jefes.",
+  ]},
+  { version: "1.17.1", changes: [
+    "Arreglado: una nota fijada como aviso ya no se podía cerrar del todo. Ahora, mientras esté fijada, no tiene botón de \"Cerrar\" — solo un jefe puede editarla (para desfijarla) o eliminarla.",
   ]},
 ];
 // se mantiene por compatibilidad con el resto del código, siempre apunta a la version mas nueva
@@ -962,6 +971,7 @@ function catedrasForToday(doorId) {
   });
 }
 function addNote(note) { update(prev => ({ ...prev, notes: [{ id:`note-${now()}`, createdBy:user.name, createdAt:now(), doorIds: note.doorIds||[], dismissedOccurrences: [], ...note }, ...(prev.notes||[])] })); }
+function updateNote(id, fields) { update(prev => ({ ...prev, notes: (prev.notes||[]).map(n => n.id===id ? { ...n, ...fields } : n) })); }
 function deleteNote(id) { update(prev => ({ ...prev, notes: (prev.notes||[]).filter(n=>n.id!==id) })); }
 function dismissNote(id, occurrenceKey) {
   update(prev => ({ ...prev, notes: (prev.notes||[]).map(n => n.id===id ? { ...n, dismissedOccurrences: [...(n.dismissedOccurrences||[]), occurrenceKey] } : n) }));
@@ -970,6 +980,9 @@ function dismissNote(id, occurrenceKey) {
 function todayDateStr(d) { return (d||new Date()).toISOString().slice(0,10); }
 function occurrenceKeyFor(note, dateStr) { return note.recurrence === "semanal" ? `${note.id}|${dateStr}` : note.id; }
 function isNoteActiveNow(note, d) {
+  const key = occurrenceKeyFor(note, todayDateStr(d));
+  if ((note.dismissedOccurrences||[]).includes(key)) return false;
+  if (note.pinned) return true; // los avisos fijados por un jefe se ven siempre, sin importar día/hora
   const dow = d.getDay();
   if (note.recurrence === "semanal" && !(note.daysOfWeek||[]).includes(dow)) return false;
   if (note.time) {
@@ -977,8 +990,6 @@ function isNoteActiveNow(note, d) {
     const target = new Date(d); target.setHours(hh, mm - 30, 0, 0);
     if (d < target) return false;
   }
-  const key = occurrenceKeyFor(note, todayDateStr(d));
-  if ((note.dismissedOccurrences||[]).includes(key)) return false;
   return true;
 }
 
@@ -1180,13 +1191,17 @@ function renderInicio(allDoors, pendingList) {
   if (!activeNotes.length) html += `<p style="font-size:12px;color:var(--ink-soft);margin-bottom:16px;">No hay notas activas ahora mismo.</p>`;
   else {
     html += `<div style="margin-bottom:20px;">` + activeNotes.map(n => `
-      <div class="card" style="margin-bottom:8px;">
+      <div class="card" style="margin-bottom:8px;${n.pinned?"border-color:var(--brass);":""}">
         <div style="display:flex;justify-content:space-between;gap:8px;">
-          <p style="font-size:13px;font-weight:600;margin:0;">${esc(n.text)}</p>
-          <button data-close-note="${n.id}" style="color:var(--ink-soft);font-size:11px;font-weight:600;white-space:nowrap;">Cerrar ✕</button>
+          <p style="font-size:13px;font-weight:600;margin:0;">${n.pinned?"📌 ":""}${esc(n.text)}</p>
+          <div style="display:flex;gap:10px;flex-shrink:0;">
+            <button data-edit-note-inicio="${n.id}" style="color:var(--brass);font-size:11px;font-weight:600;white-space:nowrap;">Editar</button>
+            ${n.pinned ? "" : `<button data-close-note="${n.id}" style="color:var(--ink-soft);font-size:11px;font-weight:600;white-space:nowrap;">Cerrar ✕</button>`}
+          </div>
         </div>
         ${n.doorIds && n.doorIds.length ? `<p style="font-size:11px;color:var(--brass);font-weight:600;margin:2px 0 0;">Aulas: ${n.doorIds.map(id=>data.doors[id]?.label||id).join(", ")}</p>` : ""}
         <p style="font-size:11px;color:var(--ink-soft);margin:2px 0 0;">${n.recurrence==="semanal"?`Todos los ${(n.daysOfWeek||[]).map(v=>DIAS[v]).join(", ")}`:"Una vez"}${n.time?` · ${n.time} hs`:""} · cargó ${esc(n.createdBy)}</p>
+        ${n.pinned ? `<p style="font-size:10px;color:var(--brass);margin:4px 0 0;">📌 Aviso fijado — solo un jefe puede editarlo o quitarlo.</p>` : ""}
       </div>`).join("") + `</div>`;
   }
 
@@ -1392,6 +1407,7 @@ function bindTabHandlers(root) {
       const n = (data.notes||[]).find(x=>x.id===b.dataset.closeNote);
       if (n) dismissNote(n.id, occurrenceKeyFor(n, todayDateStr(new Date())));
     });
+    root.querySelectorAll("[data-edit-note-inicio]").forEach(b => b.onclick = () => renderNoteSheet(b.dataset.editNoteInicio));
     const seeAllBtn = document.getElementById("see-all-notes");
     if (seeAllBtn) seeAllBtn.onclick = () => renderAllNotesSheet();
     const toggleBtn = document.getElementById("toggle-note-form");
@@ -1453,27 +1469,34 @@ function bindTabHandlers(root) {
   }
 }
 
-function noteFormHTML(doorLabels) {
+function noteFormHTML(doorLabels, initial) {
+  const val = initial || {};
+  const isSemanal = val.recurrence === "semanal";
   return `<div class="card" style="margin-bottom:14px;">
     ${doorLabels ? `<p style="font-size:11px;color:var(--ink-soft);margin-bottom:4px;">PARA ESTAS AULAS</p>
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">${doorLabels.map(l=>`<span class="chip active">${esc(l)}</span>`).join("")}</div>` : ""}
-    <input id="note-text" placeholder="Ej: abrir la puerta entre 106 y 107" style="width:100%;border:1px solid #D8CFB8;border-radius:6px;padding:9px 10px;font-size:13px;margin-bottom:8px;" />
+    <input id="note-text" value="${esc(val.text||"")}" placeholder="Ej: abrir la puerta entre 106 y 107" style="width:100%;border:1px solid #D8CFB8;border-radius:6px;padding:9px 10px;font-size:13px;margin-bottom:8px;" />
     <div style="display:flex;gap:8px;margin-bottom:8px;">
-      <button id="note-rec-unica" class="chip active" style="flex:1;">Una vez</button>
-      <button id="note-rec-semanal" class="chip" style="flex:1;">Todas las semanas</button>
+      <button id="note-rec-unica" class="chip ${isSemanal?"":"active"}" style="flex:1;">Una vez</button>
+      <button id="note-rec-semanal" class="chip ${isSemanal?"active":""}" style="flex:1;">Todas las semanas</button>
     </div>
-    <div id="note-days" class="hidden" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">
-      ${DIAS_CORTO.map(d=>`<button class="chip note-day" data-day="${d.v}" style="${d.v===5?'background:var(--brass-soft);':''}">${d.v===5?'✓ ':''}${d.l}</button>`).join("")}
+    <div id="note-days" class="${isSemanal?"":"hidden"}" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">
+      ${DIAS_CORTO.map(d=>{ const sel = isSemanal ? (val.daysOfWeek||[]).includes(d.v) : d.v===5; return `<button class="chip note-day" data-day="${d.v}" style="${sel?'background:var(--brass-soft);':''}">${sel?'✓ ':''}${d.l}</button>`; }).join("")}
     </div>
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
       <label style="font-size:11px;color:var(--ink-soft);">Hora (opcional):</label>
-      <input id="note-time" type="time" style="border:1px solid #D8CFB8;border-radius:6px;padding:4px 8px;font-size:12px;" />
+      <input id="note-time" type="time" value="${val.time||""}" style="border:1px solid #D8CFB8;border-radius:6px;padding:4px 8px;font-size:12px;" />
     </div>
-    <button id="note-save" class="btn-primary" disabled>Guardar nota</button>
+    ${(user.role==="jefe"||isSuperuser(user)) ? `<label style="display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:12px;color:var(--ink-soft);">
+      <input type="checkbox" id="note-pinned" ${val.pinned?"checked":""} /> 📌 Fijar como aviso (se ve siempre, para todos, hasta que alguien lo cierre)
+    </label>` : ""}
+    <button id="note-save" class="btn-primary">${initial?"Guardar cambios":"Guardar nota"}</button>
   </div>`;
 }
-function bindNoteForm(root, onSave) {
-  let recurrence = "unica", daysOfWeek = [5];
+function bindNoteForm(root, onSave, initial) {
+  const val = initial || {};
+  let recurrence = val.recurrence === "semanal" ? "semanal" : "unica";
+  let daysOfWeek = val.recurrence === "semanal" ? [...(val.daysOfWeek||[])] : [5];
   const textI = root.querySelector("#note-text"), saveBtn = root.querySelector("#note-save");
   const recU = root.querySelector("#note-rec-unica"), recS = root.querySelector("#note-rec-semanal"), daysWrap = root.querySelector("#note-days");
   const checkValid = () => saveBtn.disabled = !textI.value.trim() || (recurrence==="semanal" && daysOfWeek.length===0);
@@ -1486,7 +1509,11 @@ function bindNoteForm(root, onSave) {
     else { daysOfWeek = [...daysOfWeek, v].sort(); b.style.background="var(--brass-soft)"; b.textContent = "✓ " + DIAS_CORTO.find(d=>d.v===v).l; }
     checkValid();
   });
-  saveBtn.onclick = () => onSave({ text: textI.value.trim(), recurrence, daysOfWeek: recurrence==="semanal"?daysOfWeek:[], time: root.querySelector("#note-time").value || null });
+  checkValid();
+  saveBtn.onclick = () => {
+    const pinnedEl = root.querySelector("#note-pinned");
+    onSave({ text: textI.value.trim(), recurrence, daysOfWeek: recurrence==="semanal"?daysOfWeek:[], time: root.querySelector("#note-time").value || null, pinned: pinnedEl ? pinnedEl.checked : !!val.pinned });
+  };
 }
 
 /* ---------- barra de seleccion multiple ---------- */
@@ -1567,8 +1594,11 @@ function renderAllNotesSheet() {
     ${!shown.length ? `<p style="font-size:13px;color:var(--ink-soft);">No hay notas para este filtro.</p>` : ""}
     ${shown.map(n => `<div class="card" style="margin-bottom:8px;">
         <div style="display:flex;justify-content:space-between;gap:8px;">
-          <p style="font-size:13px;font-weight:600;margin:0;">${esc(n.text)}</p>
-          <button data-del-note-all="${n.id}" style="color:var(--red);font-size:11px;font-weight:600;white-space:nowrap;">Eliminar</button>
+          <p style="font-size:13px;font-weight:600;margin:0;">${n.pinned?"📌 ":""}${esc(n.text)}</p>
+          <div style="display:flex;gap:10px;flex-shrink:0;">
+            <button data-edit-note="${n.id}" style="color:var(--brass);font-size:11px;font-weight:600;white-space:nowrap;">Editar</button>
+            ${(user.role==="jefe"||isSuperuser(user)) ? `<button data-del-note-all="${n.id}" style="color:var(--red);font-size:11px;font-weight:600;white-space:nowrap;">Eliminar</button>` : ""}
+          </div>
         </div>
         ${n.doorIds && n.doorIds.length ? `<p style="font-size:11px;color:var(--brass);font-weight:600;margin:2px 0 0;">Aulas: ${n.doorIds.map(id=>data.doors[id]?.label||id).join(", ")}</p>` : ""}
         <p style="font-size:11px;color:var(--ink-soft);margin:2px 0 0;">${n.recurrence==="semanal"?`Todos los ${(n.daysOfWeek||[]).map(v=>DIAS[v]).join(", ")}`:"Una vez"}${n.time?` · ${n.time} hs`:""} · cargó ${esc(n.createdBy)}</p>
@@ -1578,23 +1608,30 @@ function renderAllNotesSheet() {
   document.getElementById("all-notes-close").onclick = close;
   document.getElementById("all-notes-bg").onclick = (e) => { if (e.target.id==="all-notes-bg") close(); };
   root.querySelectorAll(".all-notes-day").forEach(b => b.onclick = () => { allNotesDayFilter = b.dataset.day==="todos" ? "todos" : parseInt(b.dataset.day); renderAllNotesSheet(); });
+  root.querySelectorAll("[data-edit-note]").forEach(b => b.onclick = () => renderNoteSheet(b.dataset.editNote));
   root.querySelectorAll("[data-del-note-all]").forEach(b => b.onclick = () => { if (confirm("¿Eliminar esta nota para siempre?")) { deleteNote(b.dataset.delNoteAll); renderAllNotesSheet(); } });
 }
 
-function renderNoteSheet() {
-  if (!noteDraftIds) return;
+function renderNoteSheet(editNoteId) {
+  if (!noteDraftIds && !editNoteId) return;
   const root = document.getElementById("detail-root");
-  const labels = noteDraftIds.map(id => data.doors[id]?.label).filter(Boolean);
+  const editing = editNoteId ? (data.notes||[]).find(n=>n.id===editNoteId) : null;
+  const doorIds = editing ? (editing.doorIds||[]) : noteDraftIds;
+  const labels = doorIds.map(id => data.doors[id]?.label).filter(Boolean);
   root.innerHTML = `<div class="sheet" id="note-sheet-bg"><div class="sheet-inner">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-        <h2 class="display" style="font-size:20px;font-weight:700;margin:0;">Nueva nota</h2>
+        <h2 class="display" style="font-size:20px;font-weight:700;margin:0;">${editing?"Editar nota":"Nueva nota"}</h2>
         <button id="note-sheet-close" style="font-size:20px;">✕</button>
       </div>
-      ${noteFormHTML(labels)}
+      ${noteFormHTML(labels, editing)}
     </div></div>`;
-  document.getElementById("note-sheet-close").onclick = () => { noteDraftIds = null; root.innerHTML = ""; render(); };
-  document.getElementById("note-sheet-bg").onclick = (e) => { if (e.target.id==="note-sheet-bg") { noteDraftIds=null; root.innerHTML=""; render(); } };
-  bindNoteForm(root, (note) => { addNote({ ...note, doorIds: noteDraftIds }); noteDraftIds = null; root.innerHTML = ""; clearSelection(); });
+  const close = () => { noteDraftIds = null; root.innerHTML = ""; render(); };
+  document.getElementById("note-sheet-close").onclick = close;
+  document.getElementById("note-sheet-bg").onclick = (e) => { if (e.target.id==="note-sheet-bg") close(); };
+  bindNoteForm(root, (note) => {
+    if (editing) { updateNote(editing.id, note); root.innerHTML = ""; renderAllNotesSheet(); }
+    else { addNote({ ...note, doorIds: noteDraftIds }); noteDraftIds = null; root.innerHTML = ""; clearSelection(); }
+  }, editing);
 }
 
 /* ---------- ficha de personal ---------- */
@@ -1835,7 +1872,14 @@ function renderDoorDetail() {
   const ro = document.getElementById("det-req-open"), rc = document.getElementById("det-req-closed");
   const requestWithRelated = (type) => {
     if (!confirmIfAlreadyInState([d], type)) return;
-    const others = otherAulasForCatedraLabel(selectedCatedra, d.id);
+    // solo se sugieren las que en verdad necesitan el cambio: nada que ya esté en ese estado,
+    // ni nada que ya tenga un pedido pendiente del mismo tipo (para no duplicar ni hacer caminar de más).
+    const others = otherAulasForCatedraLabel(selectedCatedra, d.id).filter(id => {
+      const od = data.doors[id];
+      if (od.status === type) return false;
+      if (od.pendingRequest && od.pendingRequest.type === type) return false;
+      return true;
+    });
     if (others.length) {
       const names = others.map(id => aulaLabel(id)).join(", ");
       const verbo = type==="open" ? "apertura" : "cierre";
