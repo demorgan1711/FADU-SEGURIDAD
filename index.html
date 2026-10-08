@@ -84,6 +84,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
 import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-functions.js";
 import { getMessaging, getToken, onMessage, isSupported } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-messaging.js";
 
 /* ======= PEGÁ ACÁ TU CONFIG DE FIREBASE (Configuración del proyecto > Tus apps) ======= */
@@ -112,7 +113,7 @@ const ZONES = [
 ];
 const DELAY_MS = 15 * 60 * 1000;
 
-const APP_VERSION = "1.17.2";
+const APP_VERSION = "1.17.3";
 const VERSION_HISTORY = [
   { version: "1.6.0", changes: [
     "Arreglado un error que dejaba de guardar cambios después de contradecir una solicitud (afectaba solo a esas aulas puntuales).",
@@ -223,6 +224,9 @@ const VERSION_HISTORY = [
   { version: "1.17.2", changes: [
     "Si alguien de Pisos no tiene ningún piso asignado y abre o cierra una puerta, queda asignado automáticamente a ese sector para empezar a recibir los avisos.",
     "Arreglado: al elegir una cátedra para pedir una apertura, ahora se ve resaltada con las letras en rojo.",
+  ]},
+  { version: "1.17.3", changes: [
+    "El aula EP106 ahora lleva un 📺 rojo: no tiene TV, pero su llave está en el manojo de las aulas con TV.",
   ]},
 ];
 // se mantiene por compatibilidad con el resto del código, siempre apunta a la version mas nueva
@@ -364,7 +368,7 @@ function buildInitialDoors() {
     if (n === 111) add("S", "Aula S (Feldman)", "100", "Sector 100", "aula", false);
   }
   const SPLIT = [112, 124]; // puntas del Entrepiso: sus 8 sub-aulas con letra van al sector Auxiliares
-  const TV_EP = ["EP101","EP103","EP106","EP109","EP111","EP113","EP115","EP121","EP123"];
+  const TV_EP = ["EP101","EP103","EP109","EP111","EP113","EP115","EP121","EP123"];
   for (let n = 101; n <= 124; n++) {
     if (SPLIT.includes(n)) {
       ["A","B","C","D"].forEach(l => add(`EP${n}${l}`, `EP${n}${l}`, "EP-AUX", "Auxiliares Entrepiso", "aula", true, false));
@@ -374,6 +378,8 @@ function buildInitialDoors() {
     }
     if (n === 110) add("EP-DISENO", "Depósito de Diseño", "EP", "Entrepiso", "deposito", false);
   }
+  // EP106 no tiene TV, pero su llave esta en el manojo de las aulas con TV
+  doors["EP106"].tvKeyOnly = true;
   const TV_200 = ["205","206","207","208","226","228"];
   for (let n = 201; n <= 228; n++) add(String(n), String(n), "200", "Sector 200", "aula", true, TV_200.includes(String(n)));
   for (let n = 1; n <= 38; n++) { const num = String(n).padStart(2,"0"); add(`D${num}`, `Depósito ${num}`, "DEP", "Depósitos", "deposito", true); }
@@ -1114,7 +1120,7 @@ function plateHTML(d) {
   const hasNotes = (data.notes||[]).some(n => n.doorIds && n.doorIds.includes(d.id));
   return `<button class="plate" data-door="${d.id}"
       style="${selected?'background:var(--brass-soft);border-color:var(--brass);border-width:2px;':''}">
-    ${d.hasTV ? '<span style="position:absolute;top:3px;left:3px;font-size:10px;">📺</span>' : ''}
+    ${d.hasTV ? '<span style="position:absolute;top:3px;left:3px;font-size:10px;">📺</span>' : d.tvKeyOnly ? '<span title="Sin TV, pero su llave está en el manojo de TV" style="position:absolute;top:2px;left:2px;font-size:9px;background:var(--red);border-radius:3px;padding:0 2px;line-height:12px;">📺</span>' : ''}
     ${(d.anomalies||[]).some(a=>!a.resolved) ? '<span style="position:absolute;bottom:3px;right:3px;font-size:10px;">⚠️</span>' : ''}
     ${d.status==="closed" && d.clean ? '<span style="position:absolute;bottom:3px;left:3px;font-size:10px;">✅</span>' : ''}
     ${selectionMode ? `<span style="position:absolute;top:3px;right:3px;width:14px;height:14px;border-radius:4px;border:1px solid var(--brass);background:${selected?'var(--brass)':'#fff'};color:#fff;font-size:9px;display:flex;align-items:center;justify-content:center;">${selected?'✓':''}</span>` : (hasNotes ? '<span style="position:absolute;top:3px;right:3px;font-size:10px;">📝</span>' : '')}
@@ -1284,6 +1290,7 @@ function renderSectores(allDoors) {
     <div class="grid4">${shown.map(plateHTML).join("")}</div>
     <div style="margin-top:20px;padding-top:12px;border-top:1px solid #E4DECB;display:flex;flex-wrap:wrap;gap:10px;font-size:10px;color:var(--ink-soft);">
       <span>📺 tiene TV</span>
+      <span><span style="background:var(--red);border-radius:3px;padding:0 2px;">📺</span> sin TV, llave en manojo de TV</span>
       <span>✅ cerrada y limpia</span>
       <span>⚠️ anomalía sin resolver</span>
       <span>📝 tiene notas</span>
@@ -1410,6 +1417,7 @@ function renderPersonal() {
       <p class="display" style="font-size:18px;font-weight:700;margin-bottom:6px;">Cátedras</p>
       <p style="font-size:11px;color:var(--ink-soft);margin-bottom:10px;">Al pedir apertura/cierre se muestran solo las cátedras del turno y el día de quien pide. Tocá una para corregirla — los pedidos y el historial se actualizan solos.</p>
       ${catedrasBlock}
+      ${isSuperuser(user) ? `<div style="text-align:right;margin-top:10px;"><button id="send-report-btn" style="font-size:9px;color:var(--ink-soft);background:none;border:1px solid #D8CFB8;border-radius:6px;padding:2px 6px;opacity:.7;">✉</button></div>` : ""}
     </div>
     ${permisosBlock}`;
 }
@@ -1445,6 +1453,13 @@ function bindTabHandlers(root) {
   if (tab==="personal" && (user.role==="jefe" || isSuperuser(user))) {
     const addBtn = document.getElementById("add-staff-btn");
     if (addBtn) addBtn.onclick = () => openStaffSheet(null);
+    const repBtn = document.getElementById("send-report-btn");
+    if (repBtn) repBtn.onclick = async () => {
+      repBtn.disabled = true; const t0 = repBtn.textContent; repBtn.textContent = "…";
+      try { await httpsCallable(getFunctions(app, "southamerica-east1"), "sendReportNow")(); repBtn.textContent = "✓"; }
+      catch (e) { repBtn.textContent = "✗"; alert("No se pudo enviar: " + (e && e.message ? e.message : e)); }
+      setTimeout(() => { repBtn.disabled = false; repBtn.textContent = t0; }, 4000);
+    };
     root.querySelectorAll("[data-edit-staff]").forEach(b => b.onclick = () => openStaffSheet(b.dataset.editStaff));
     root.querySelectorAll("[data-edit-catedra]").forEach(b => b.onclick = () => openCatedraSheet(b.dataset.editCatedra));
     const catSearch = document.getElementById("catedra-search");
@@ -1816,6 +1831,7 @@ function renderDoorDetail() {
         </div>
       </div>`;
     })()}
+    ${d.tvKeyOnly ? `<div class="card" style="margin-bottom:16px;background:#F1ECDD;border-color:var(--red);"><p style="font-size:12px;margin:0;color:var(--red);font-weight:600;">📺 No tiene TV, pero su llave está en el manojo de las aulas con TV.</p></div>` : ""}
     ${d.hasTV ? `<div class="card" style="margin-bottom:16px;background:#F1ECDD;"><p style="font-size:12px;margin:0;">📺 Tiene TV — extremar el cuidado al cerrar.</p></div>` : ""}
     ${d.status==="closed" && d.clean ? `<div class="card" style="margin-bottom:16px;background:var(--green-soft);"><p style="font-size:12px;margin:0;">✅ Quedó cerrada y limpia — limpieza no necesita revisarla.</p></div>` : ""}
     ${pr ? `<div class="card" style="margin-bottom:16px;background:${pr.type==="open"?"var(--green-soft)":"var(--red-soft)"};">
