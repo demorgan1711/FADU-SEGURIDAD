@@ -39,7 +39,9 @@
   .btn-primary:disabled{background:#C7BFA9;}
   .card{background:#fff;border:1px solid #D8CFB8;border-radius:10px;padding:12px;}
   .chip{padding:8px 12px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid #D8CFB8;background:#fff;min-width:0;}
-  .chip.active{background:var(--ink);color:#F7F4EC;}
+  .chip.det-cat.active{background:#fff !important;color:var(--red) !important;border-color:var(--red) !important;font-weight:700;}
+.chip.det-cat.active span{color:var(--red) !important;}
+.chip.active{background:var(--ink);color:#F7F4EC;}
   .hidden{display:none !important;}
   .pin-input{letter-spacing:10px;text-align:center;font-size:22px;width:100%;border:1px solid #D8CFB8;border-radius:8px;padding:12px;}
   .row-btn{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #E4DECB;width:100%;text-align:left;}
@@ -110,7 +112,7 @@ const ZONES = [
 ];
 const DELAY_MS = 15 * 60 * 1000;
 
-const APP_VERSION = "1.17.1";
+const APP_VERSION = "1.17.2";
 const VERSION_HISTORY = [
   { version: "1.6.0", changes: [
     "Arreglado un error que dejaba de guardar cambios después de contradecir una solicitud (afectaba solo a esas aulas puntuales).",
@@ -217,6 +219,10 @@ const VERSION_HISTORY = [
   ]},
   { version: "1.17.1", changes: [
     "Arreglado: una nota fijada como aviso ya no se podía cerrar del todo. Ahora, mientras esté fijada, no tiene botón de \"Cerrar\" — solo un jefe puede editarla (para desfijarla) o eliminarla.",
+  ]},
+  { version: "1.17.2", changes: [
+    "Si alguien de Pisos no tiene ningún piso asignado y abre o cierra una puerta, queda asignado automáticamente a ese sector para empezar a recibir los avisos.",
+    "Arreglado: al elegir una cátedra para pedir una apertura, ahora se ve resaltada con las letras en rojo.",
   ]},
 ];
 // se mantiene por compatibilidad con el resto del código, siempre apunta a la version mas nueva
@@ -747,6 +753,13 @@ function otherAulasForCatedraLabel(label, excludeDoorId) {
   const allAulas = [...new Set(matching.flatMap(catedraAulas))];
   return allAulas.filter(a => a !== excludeDoorId && data.doors[a]);
 }
+function autoPlaceInSector(staff, sector) {
+  if (!user || user.role !== "recorrido") return staff;
+  const me = staff[user.name];
+  if (!me || (me.zones||[]).length) return staff;
+  user.zones = [sector];
+  return { ...staff, [user.name]: { ...me, zones: [sector] } };
+}
 function markDoor(doorId, status, clean, keyHolders) {
   update(prev => {
     const d = prev.doors[doorId]; const pr = d.pendingRequest;
@@ -760,6 +773,8 @@ function markDoor(doorId, status, clean, keyHolders) {
         if (s && !(s.zones||[]).includes(d.sector)) staff[name] = { ...s, zones: [...(s.zones||[]), d.sector] };
       });
     }
+    // si quien ejecuta es de Pisos y no tiene ningún piso asignado, se lo coloca en el sector de esta puerta (para que le lleguen los avisos)
+    staff = autoPlaceInSector(staff, d.sector);
     return { ...prev,
       staff,
       doors: { ...prev.doors, [doorId]: { ...d, status, keyHolders: status==="open" ? (keyHolders || []) : [], pendingRequest:null, clean: status==="closed" ? !!clean : false } },
@@ -1077,6 +1092,7 @@ function bulkMark(status, clean, keyHolders) {
         });
       }
     });
+    selectedIds.forEach(id => { staff = autoPlaceInSector(staff, doors[id].sector); });
     return { ...prev, staff, doors, history: [...entries, ...prev.history].slice(0,300) };
   });
   clearSelection();
