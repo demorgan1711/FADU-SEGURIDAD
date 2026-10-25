@@ -48,18 +48,71 @@
 </style>
 </head>
 <body>
+<div id="splash" style="position:fixed;inset:0;z-index:9999;background:#F7F4EC;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center;">
+  <svg class="sp-plan" viewBox="0 0 400 800" preserveAspectRatio="xMidYMid slice" aria-hidden="true" style="position:absolute;inset:0;width:100%;height:100%;">
+    <g fill="none" stroke="#22303C" stroke-width="1" vector-effect="non-scaling-stroke">
+      <path pathLength="1" d="M20 120 H380 V300 H240 V420 H380 V680 H20 Z" />
+      <path pathLength="1" d="M20 300 H150 V420 H20" />
+      <path pathLength="1" d="M150 120 V200 H240 V120" />
+      <path pathLength="1" d="M20 520 H200 V680" />
+      <path pathLength="1" d="M200 520 H300 V420" />
+      <path pathLength="1" d="M60 80 H340 M60 720 H340" />
+      <path pathLength="1" d="M20 60 V740 M380 60 V740" />
+    </g>
+  </svg>
+  <div class="sp-logo"><img src="icons/logo-fadu.png" alt="UBA FADU" onerror="this.style.display='none'" style="width:min(78vw,400px);height:auto;display:block;" /></div>
+  <div class="sp-rule"></div>
+  <p class="sp-title">Control Seguridad</p>
+  <p class="sp-sub">Área Seguridad</p>
+  <div class="sp-bar"><span></span></div>
+  <p class="sp-hint">tocá para continuar</p>
+</div>
+<style>
+#splash{transition:opacity .6s ease, transform .6s ease;}
+#splash.out{opacity:0;transform:scale(1.02);}
+#splash .sp-plan path{stroke-dasharray:1;stroke-dashoffset:1;opacity:.13;animation:spDraw 2.6s cubic-bezier(.65,0,.35,1) forwards;}
+#splash .sp-plan path:nth-child(2){animation-delay:.15s}#splash .sp-plan path:nth-child(3){animation-delay:.3s}
+#splash .sp-plan path:nth-child(4){animation-delay:.45s}#splash .sp-plan path:nth-child(5){animation-delay:.6s}
+#splash .sp-plan path:nth-child(6){animation-delay:.75s}#splash .sp-plan path:nth-child(7){animation-delay:.9s}
+#splash .sp-logo{opacity:0;filter:blur(10px);transform:scale(.96);animation:spLogo 1.3s .35s cubic-bezier(.2,.7,.2,1) forwards;position:relative;}
+#splash .sp-rule{height:2px;width:0;background:#00AEEF;margin:28px 0 20px;animation:spRule .9s 1.2s cubic-bezier(.2,.7,.2,1) forwards;position:relative;}
+#splash .sp-title{margin:0;font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:15px;font-weight:600;color:#22303C;text-transform:uppercase;letter-spacing:.42em;padding-left:.42em;opacity:0;animation:spText 1.1s 1.5s cubic-bezier(.2,.7,.2,1) forwards;position:relative;}
+#splash .sp-sub{margin:10px 0 0;font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:11px;font-weight:400;color:#6B7280;text-transform:uppercase;letter-spacing:.3em;padding-left:.3em;opacity:0;animation:spText 1.1s 1.8s ease forwards;position:relative;}
+#splash .sp-bar{position:absolute;left:50%;bottom:64px;width:120px;height:2px;margin-left:-60px;background:rgba(34,48,60,.1);overflow:hidden;}
+#splash .sp-bar span{display:block;height:100%;width:100%;background:#22303C;transform:scaleX(0);transform-origin:left;animation:spBar 3.2s .2s linear forwards;}
+#splash .sp-hint{position:absolute;bottom:34px;left:0;right:0;margin:0;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:#9CA3AF;opacity:0;animation:spHint .8s 2.2s ease forwards;}
+@keyframes spDraw{to{stroke-dashoffset:0}}
+@keyframes spLogo{to{opacity:1;filter:blur(0);transform:none}}
+@keyframes spRule{to{width:72px}}
+@keyframes spText{from{opacity:0;transform:translateY(6px);letter-spacing:.7em}to{opacity:1;transform:none}}
+@keyframes spBar{to{transform:scaleX(1)}}
+@keyframes spHint{to{opacity:1}}
+@media (prefers-reduced-motion:reduce){#splash *{animation-duration:.01s !important;animation-delay:0s !important}}
+</style>
+<script>
+(function(){
+  var el=document.getElementById("splash"); if(!el) return;
+  var done=false;
+  function hide(){ if(done) return; done=true; el.classList.add("out"); setTimeout(function(){ if(el.parentNode) el.parentNode.removeChild(el); },650); }
+  el.addEventListener("click",hide); el.addEventListener("touchstart",hide,{passive:true});
+  setTimeout(hide,3400);
+})();
+</script>
 
 <div id="app">
   <div id="view-login" style="padding:50px 24px;"><div id="login-content"></div></div>
 
   <div id="view-app" class="hidden">
     <div class="header">
-      <div>
-        <p class="display" style="font-size:18px;font-weight:700;margin:0;">Control Seguridad FADU</p>
-        <p id="user-sub" style="font-size:12px;opacity:.75;margin:2px 0 0;"></p>
+      <div style="display:flex;align-items:center;gap:10px;min-width:0;flex:1;">
+        <span style="background:#F7F4EC;border-radius:7px;padding:3px 5px;display:flex;flex-shrink:0;"><img src="icons/logo-fadu.png" alt="UBA FADU" onerror="this.parentNode.style.display='none'" style="height:19px;width:auto;display:block;" /></span>
+        <div style="min-width:0;flex:1;">
+          <p class="display" style="font-size:15px;font-weight:700;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Control Seguridad</p>
+          <p id="user-sub" style="font-size:11px;opacity:.75;margin:2px 0 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></p>
+        </div>
       </div>
-      <div style="display:flex;align-items:center;gap:10px;">
-        <button id="btn-shift-action" class="hidden" style="color:#F7F4EC;font-size:11px;border:1px solid rgba(255,255,255,0.5);padding:5px 9px;border-radius:6px;white-space:nowrap;"></button>
+      <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
+        <button id="btn-shift-action" class="hidden" style="color:#F7F4EC;font-size:10px;border:1px solid rgba(255,255,255,0.5);padding:4px 7px;border-radius:6px;white-space:nowrap;"></button>
         <button id="btn-logout" style="color:#F7F4EC;font-size:20px;">⎋</button>
       </div>
     </div>
@@ -83,7 +136,7 @@
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
-import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-functions.js";
 import { getMessaging, getToken, onMessage, isSupported } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-messaging.js";
 
@@ -100,7 +153,11 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const db = getFirestore(app);
+// Cache local persistente (IndexedDB): si se corta internet, los cambios quedan en cola y sobreviven a un F5
+// o a cerrar la app; se envian solos cuando vuelve la conexion. Si el navegador no lo soporta, funciona como antes.
+let db;
+try { db = initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }); }
+catch (e) { db = getFirestore(app); }
 const STATE_DOC = doc(db, "app", "estado");
 /* Pegá acá tu clave VAPID (Firebase Console > Configuración del proyecto > Cloud Messaging > Configuración web > Generar par de claves) */
 const VAPID_KEY = "BBZ0n-AuXpY4i7nZxKF3QNhCqNeDioZhfw_oTSSw1nYwWPye54U2OTblOhmF3nxIgoH9qjxONYt8EkpfTFqhF4I";
@@ -113,7 +170,7 @@ const ZONES = [
 ];
 const DELAY_MS = 15 * 60 * 1000;
 
-const APP_VERSION = "1.17.3";
+const APP_VERSION = "1.17.4";
 const VERSION_HISTORY = [
   { version: "1.6.0", changes: [
     "Arreglado un error que dejaba de guardar cambios después de contradecir una solicitud (afectaba solo a esas aulas puntuales).",
@@ -227,6 +284,12 @@ const VERSION_HISTORY = [
   ]},
   { version: "1.17.3", changes: [
     "El aula EP106 ahora lleva un 📺 rojo: no tiene TV, pero su llave está en el manojo de las aulas con TV.",
+  ]},
+  { version: "1.17.4", changes: [
+    "Nueva pantalla de bienvenida con el logo de la facultad al abrir la app (se saltea tocando la pantalla).",
+    "Los jefes ahora pueden eliminar una nota directamente desde Inicio (antes solo estaba en \"Ver todas\").",
+    "Corregido: el aula 109 del Sector 100 no tiene TV.",
+    "Mejorado: si se corta la conexión, los cambios hechos quedan guardados en el celular aunque se recargue la página, y se envían solos cuando vuelve internet.",
   ]},
 ];
 // se mantiene por compatibilidad con el resto del código, siempre apunta a la version mas nueva
@@ -362,7 +425,7 @@ function buildInitialDoors() {
   // Subsuelo: Aula Magna + aulas 1 a 4
   add("SS-MAGNA", "Aula Magna", "SS", "Subsuelo", "aula", true);
   for (let n = 1; n <= 4; n++) add(`SS${n}`, String(n).padStart(2,"0"), "SS", "Subsuelo", "aula", true);
-  const TV_100 = ["106","107","109","115","118"];
+  const TV_100 = ["106","107","115","118"];
   for (let n = 101; n <= 124; n++) {
     add(String(n), String(n), "100", "Sector 100", "aula", true, TV_100.includes(String(n)));
     if (n === 111) add("S", "Aula S (Feldman)", "100", "Sector 100", "aula", false);
@@ -532,7 +595,7 @@ function renderLogin() {
 
   const header = `
     <div style="text-align:center;margin-bottom:28px;">
-      <div style="width:52px;height:52px;border-radius:999px;background:var(--brass-soft);margin:0 auto 12px;display:flex;align-items:center;justify-content:center;font-size:22px;">🔑</div>
+      <img src="icons/logo-fadu.png" alt="UBA FADU" onerror="this.style.display='none'" style="width:min(70vw,260px);height:auto;margin:0 auto 14px;display:block;" />
       <h1 class="display" style="font-size:24px;font-weight:700;margin:0;">Control Seguridad FADU</h1>
       <p style="font-size:13px;color:var(--ink-soft);">Control de aulas y depósitos</p>
     </div>`;
@@ -787,6 +850,20 @@ function markDoor(doorId, status, clean, keyHolders) {
       history: [entry, ...prev.history].slice(0,300) };
   });
   selectedDoorId = null; render();
+}
+// Cierre general (jefes del turno noche): marca como cerradas todas las aulas abiertas, con su registro en el historial.
+function closeAllOpen() {
+  update(prev => {
+    const doors = { ...prev.doors }; const entries = []; const t = now();
+    Object.keys(doors).forEach(id => {
+      const d = doors[id];
+      if (d.status !== "open") return;
+      const pr = d.pendingRequest && d.pendingRequest.type !== "open" ? d.pendingRequest : null; // pedido de cierre pendiente: se da por cumplido
+      entries.push({ id:`${id}-${t}-${Math.random().toString(36).slice(2,6)}`, doorId:id, doorLabel:d.label, action:"closed", requestedBy: pr?pr.requestedBy:null, requestedAt: pr?pr.requestedAt:null, catedra: (pr && pr.catedra) ? pr.catedra : null, executedBy:user.name, executedAt:t });
+      doors[id] = { ...d, status:"closed", keyHolders:[], pendingRequest: pr ? null : d.pendingRequest, clean:false };
+    });
+    return { ...prev, doors, history: [...entries, ...prev.history].slice(0,400) };
+  });
 }
 function reportAnomaly(doorId, text) {
   update(prev => {
@@ -1219,6 +1296,7 @@ function renderInicio(allDoors, pendingList) {
           <div style="display:flex;gap:10px;flex-shrink:0;">
             <button data-edit-note-inicio="${n.id}" style="color:var(--brass);font-size:11px;font-weight:600;white-space:nowrap;">Editar</button>
             ${n.pinned ? "" : `<button data-close-note="${n.id}" style="color:var(--ink-soft);font-size:11px;font-weight:600;white-space:nowrap;">Cerrar ✕</button>`}
+            ${(user.role==="jefe"||isSuperuser(user)) ? `<button data-del-note-inicio="${n.id}" style="color:var(--red);font-size:11px;font-weight:600;white-space:nowrap;">Eliminar</button>` : ""}
           </div>
         </div>
         ${n.doorIds && n.doorIds.length ? `<p style="font-size:11px;color:var(--brass);font-weight:600;margin:2px 0 0;">Aulas: ${n.doorIds.map(id=>data.doors[id]?.label||id).join(", ")}</p>` : ""}
@@ -1235,6 +1313,10 @@ function renderInicio(allDoors, pendingList) {
       <button data-filter="demoradas" class="card" style="text-align:left;${filterInicio==='demoradas'?'background:var(--brass-soft);border-color:var(--brass);':''}"><p style="font-size:22px;font-weight:700;color:var(--red);margin:0;">${delayedCount}</p><p style="font-size:11px;color:var(--ink-soft);margin:2px 0 0;">Demoradas</p></button>
       <button data-filter="anomalias" class="card" style="text-align:left;${filterInicio==='anomalias'?'background:var(--brass-soft);border-color:var(--brass);':''}"><p style="font-size:22px;font-weight:700;color:var(--red);margin:0;">${doorsWithAnomalies.length}</p><p style="font-size:11px;color:var(--ink-soft);margin:2px 0 0;">Anomalías</p></button>
     </div>`;
+  if (user.role==="jefe" && staffTurnos(data.staff[user.name]).includes("noche") || isSuperuser(user)) {
+    const openNow = Object.values(data.doors).filter(d => d.status === "open").length;
+    html += `<button id="close-all-btn" class="card" style="display:flex;gap:10px;align-items:center;width:100%;margin-bottom:12px;text-align:left;background:var(--red-soft);border-color:var(--red);"><span style="font-size:20px;">🌙</span><div><p style="font-size:13px;font-weight:700;margin:0;color:var(--red);">Cerrar todas las aulas abiertas (${openNow})</p><p style="font-size:11px;color:var(--ink-soft);margin:2px 0 0;">Cierre general de fin de turno — queda registrado en el historial.</p></div></button>`;
+  }
 
   if (filterInicio) {
     const labels = { abiertas:"Puertas abiertas", cerradas:"Puertas cerradas", solicitudes:"Solicitudes pendientes", demoradas:"Solicitudes demoradas", anomalias:"Con anomalías" };
@@ -1432,6 +1514,13 @@ function bindTabHandlers(root) {
       if (n) dismissNote(n.id, occurrenceKeyFor(n, todayDateStr(new Date())));
     });
     root.querySelectorAll("[data-edit-note-inicio]").forEach(b => b.onclick = () => renderNoteSheet(b.dataset.editNoteInicio));
+    root.querySelectorAll("[data-del-note-inicio]").forEach(b => b.onclick = () => { if (confirm("¿Eliminar esta nota para siempre?")) deleteNote(b.dataset.delNoteInicio); });
+    const closeAllBtn = document.getElementById("close-all-btn");
+    if (closeAllBtn) closeAllBtn.onclick = () => {
+      const n = Object.values(data.doors).filter(d => d.status === "open").length;
+      if (!n) { alert("No hay ninguna aula abierta."); return; }
+      if (confirm(`¿Cerrar las ${n} aulas que figuran abiertas? Se registra en el historial a tu nombre.`)) closeAllOpen();
+    };
     const seeAllBtn = document.getElementById("see-all-notes");
     if (seeAllBtn) seeAllBtn.onclick = () => renderAllNotesSheet();
     const toggleBtn = document.getElementById("toggle-note-form");
