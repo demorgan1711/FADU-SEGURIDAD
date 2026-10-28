@@ -101,6 +101,12 @@
 <script>
 (function(){
   var el=document.getElementById("splash"); if(!el) return;
+  // la intro se muestra una sola vez por dia
+  try {
+    var today=new Date().toDateString();
+    if(localStorage.getItem("fadu-intro-day")===today){ el.parentNode.removeChild(el); return; }
+    localStorage.setItem("fadu-intro-day",today);
+  } catch(e) {}
   var done=false;
   function hide(){ if(done) return; done=true; el.classList.add("out"); setTimeout(function(){ if(el.parentNode) el.parentNode.removeChild(el); },650); }
   el.addEventListener("click",hide); el.addEventListener("touchstart",hide,{passive:true});
@@ -177,7 +183,7 @@ const ZONES = [
 ];
 const DELAY_MS = 15 * 60 * 1000;
 
-const APP_VERSION = "1.17.5";
+const APP_VERSION = "1.17.6";
 const VERSION_HISTORY = [
   { version: "1.6.0", changes: [
     "Arreglado un error que dejaba de guardar cambios después de contradecir una solicitud (afectaba solo a esas aulas puntuales).",
@@ -300,6 +306,10 @@ const VERSION_HISTORY = [
   { version: "1.17.5", changes: [
     "Guardado mucho más seguro: los cambios de distintas personas y dispositivos ya no se pisan entre sí. Cada cambio se aplica sobre lo último que hay guardado.",
     "Aviso bien visible arriba de la pantalla mientras se guarda (\"Guardando…\"): hay que esperar a que termine antes de cerrar la app o bloquear el teléfono. Si no hay internet, avisa en rojo que el cambio todavía no se guardó y lo reintenta solo.",
+  ]},
+  { version: "1.17.6", changes: [
+    "Corregido: al seleccionar varias aulas, los jefes ahora pueden marcarlas abiertas o cerradas directamente, sin que el desplegable se cierre solo.",
+    "La pantalla de bienvenida ahora se muestra una sola vez por día.",
   ]},
 ];
 // se mantiene por compatibilidad con el resto del código, siempre apunta a la version mas nueva
@@ -1751,9 +1761,16 @@ function bindNoteForm(root, onSave, initial) {
 }
 
 /* ---------- barra de seleccion multiple ---------- */
+let selBarSig = "";
+let selMarkOpen = true; // el desplegable de "marcar directamente" (jefes) queda como lo dejaron
 function renderSelectionBar(pendingList) {
+  // si la seleccion no cambio, NO se vuelve a armar la barra: asi no se cierra el desplegable ni se borra
+  // lo que la persona ya eligio (llave, "limpia") cada vez que llega una actualizacion de otro celular
+  const sig = selectionMode ? selectedIds.join(",") + "|" + user.role : "";
   const bar = document.getElementById("selection-bar-root");
+  if (bar && selectionMode && sig === selBarSig) return;
   if (bar) bar.remove();
+  selBarSig = sig;
   if (!selectionMode) return;
   const div = document.createElement("div");
   div.id = "selection-bar-root";
@@ -1788,14 +1805,16 @@ function renderSelectionBar(pendingList) {
         <button id="sel-req-open" style="flex:1;padding:8px;border-radius:6px;background:var(--green-soft);font-size:12px;font-weight:600;">Pedir apertura</button>
         <button id="sel-req-closed" style="flex:1;padding:8px;border-radius:6px;background:var(--red-soft);font-size:12px;font-weight:600;">Pedir cierre</button>
       </div>
-      <details style="margin-bottom:8px;">
-        <summary style="font-size:11px;color:var(--ink-soft);cursor:pointer;">¿Ya lo hicieron por handy? Marcar directamente</summary>
+      <details id="sel-mark-details" style="margin-bottom:8px;" ${selMarkOpen?"open":""}>
+        <summary style="font-size:12px;font-weight:600;color:var(--ink);cursor:pointer;">¿Ya lo hicieron por handy? Marcar directamente</summary>
         <div style="margin-top:8px;">${markSectionJefe}</div>
       </details>` : markSectionPisos}
       <button id="sel-add-note" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--brass);font-size:12px;font-weight:600;">📝 Agregar nota para estas aulas</button>
     </div>`;
   document.body.appendChild(div);
   document.getElementById("sel-cancel").onclick = clearSelection;
+  const selDet = document.getElementById("sel-mark-details");
+  if (selDet) selDet.addEventListener("toggle", () => { selMarkOpen = selDet.open; });
   // jefes: eligen quien tiene la llave con el desplegable. Pisos: no ven nada de esto, se asignan solos.
   const selKhWidget = document.getElementById("sel-keyholders") ? bindKeyHolderPicker("sel-keyholders", sectorsInSel, []) : null;
   const markOpenSelBtn = document.getElementById("sel-mark-open"), markClosedSelBtn = document.getElementById("sel-mark-closed");
