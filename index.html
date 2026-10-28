@@ -291,25 +291,16 @@ const VERSION_HISTORY = [
   { version: "1.17.1", changes: [
     "Arreglado: una nota fijada como aviso ya no se podía cerrar del todo. Ahora, mientras esté fijada, no tiene botón de \"Cerrar\" — solo un jefe puede editarla (para desfijarla) o eliminarla.",
   ]},
-  { version: "1.17.2", changes: [
+  { version: "1.17.6", changes: [
     "Si alguien de Pisos no tiene ningún piso asignado y abre o cierra una puerta, queda asignado automáticamente a ese sector para empezar a recibir los avisos.",
-    "Arreglado: al elegir una cátedra para pedir una apertura, ahora se ve resaltada con las letras en rojo.",
-  ]},
-  { version: "1.17.3", changes: [
-    "El aula EP106 ahora lleva un 📺 rojo: no tiene TV, pero su llave está en el manojo de las aulas con TV.",
-  ]},
-  { version: "1.17.4", changes: [
-    "Nueva pantalla de bienvenida con el logo de la facultad al abrir la app (se saltea tocando la pantalla).",
-    "Los jefes ahora pueden eliminar una nota directamente desde Inicio (antes solo estaba en \"Ver todas\").",
-    "Corregido: el aula 109 del Sector 100 no tiene TV.",
-  ]},
-  { version: "1.17.5", changes: [
     "Guardado mucho más seguro: los cambios de distintas personas y dispositivos ya no se pisan entre sí. Cada cambio se aplica sobre lo último que hay guardado.",
     "Aviso bien visible arriba de la pantalla mientras se guarda (\"Guardando…\"): hay que esperar a que termine antes de cerrar la app o bloquear el teléfono. Si no hay internet, avisa en rojo que el cambio todavía no se guardó y lo reintenta solo.",
-  ]},
-  { version: "1.17.6", changes: [
-    "Corregido: al seleccionar varias aulas, los jefes ahora pueden marcarlas abiertas o cerradas directamente, sin que el desplegable se cierre solo.",
-    "La pantalla de bienvenida ahora se muestra una sola vez por día.",
+    "Corregido: al elegir una cátedra para pedir una apertura o cierre, se ve resaltada con las letras en rojo, la selección ya no se pierde cuando la pantalla se actualiza, y se sugieren todas las aulas de esa cátedra de hoy (según su turno).",
+    "Corregido: al seleccionar varias aulas, los jefes pueden marcarlas abiertas o cerradas directamente, sin que el desplegable se cierre solo.",
+    "Los jefes ahora pueden eliminar una nota directamente desde Inicio (antes solo estaba en \"Ver todas\").",
+    "El aula EP106 ahora lleva un 📺 rojo: no tiene TV, pero su llave está en el manojo de las aulas con TV.",
+    "Corregido: el aula 109 del Sector 100 no tiene TV.",
+    "Nueva pantalla de bienvenida con el logo de la facultad, una vez por día (se saltea tocando la pantalla).",
   ]},
 ];
 // se mantiene por compatibilidad con el resto del código, siempre apunta a la version mas nueva
@@ -942,7 +933,13 @@ function requestChangeMultiple(doorIds, type, catedra) {
 // ofrecer pedirlas juntas.
 function otherAulasForCatedraLabel(label, excludeDoorId) {
   if (!label) return [];
-  const matching = (data.catedras||[]).filter(c => catedraLabel(c) === label);
+  // solo cuentan las entradas de esa cátedra que corresponden a MI turno y a HOY (ej: turno noche),
+  // no las de otros turnos ni de otros días
+  const today = new Date().getDay(), myTurnos = (user && user.turnos) || [];
+  const matching = (data.catedras||[]).filter(c => catedraLabel(c) === label).filter(c => {
+    const turnos = catedraTurnos(c), dias = catedraDias(c);
+    return (!turnos.length || !myTurnos.length || turnos.some(t => myTurnos.includes(t))) && (!dias.length || dias.includes(today));
+  });
   const allAulas = [...new Set(matching.flatMap(catedraAulas))];
   return allAulas.filter(a => a !== excludeDoorId && data.doors[a]);
 }
@@ -2006,7 +2003,7 @@ function openCatedraSheet(id) {
 }
 
 /* ---------- detalle de puerta ---------- */
-let selectedCatedra = null, markCleanChecked = false, catedraDetailsOpen = false;
+let selectedCatedra = null, selectedCatedraId = null, markCleanChecked = false, catedraDetailsOpen = false, lastDetailDoor = null;
 // estos ids son los fondos de las distintas "hojas" modales que se dibujan en #detail-root.
 // si cualquiera de estas está abierta, renderDoorDetail no tiene que pisarla — sino, cualquier
 // actualización de datos en tiempo real (de cualquier usuario, en cualquier parte de la app)
@@ -2015,7 +2012,8 @@ const OTHER_MODAL_IDS = ["all-notes-bg", "version-popup-bg", "full-changelog-bg"
 function renderDoorDetail() {
   const root = document.getElementById("detail-root");
   if (OTHER_MODAL_IDS.some(id => document.getElementById(id))) return;
-  if (!selectedDoorId || !data.doors[selectedDoorId]) { if (!noteDraftIds) root.innerHTML = ""; return; }
+  if (!selectedDoorId || !data.doors[selectedDoorId]) { lastDetailDoor = null; if (!noteDraftIds) root.innerHTML = ""; return; }
+  if (lastDetailDoor !== selectedDoorId) { selectedCatedra = null; selectedCatedraId = null; lastDetailDoor = selectedDoorId; } // otra aula: arranca sin cátedra elegida
   if (isEditingWithin("detail-root")) return; // no pisar el contenido mientras esta escribiendo/tocando adentro
   const d = data.doors[selectedDoorId];
   const pr = d.pendingRequest;
@@ -2046,7 +2044,7 @@ function renderDoorDetail() {
             const otras = catedraAulas(c).filter(a => a !== d.id);
             const otrasTxt = otras.length ? `<span style="font-size:10px;color:var(--ink-soft);margin-left:6px;">· también: ${otras.map(a=>esc(aulaLabel(a))).join(", ")}</span>` : "";
             const chip = (user.role==="jefe"||isSuperuser(user))
-              ? `<button type="button" class="chip det-cat" data-cat="${label}" style="background:#fff;align-self:flex-start;">${label} ${turnoIcons} <span style="color:var(--ink-soft);">(${diasTxt})</span></button>`
+              ? `<button type="button" class="chip det-cat${selectedCatedraId===catedraId(c)?" active":""}" data-cat="${label}" data-cat-id="${esc(catedraId(c))}" style="background:#fff;align-self:flex-start;">${label} ${turnoIcons} <span style="color:var(--ink-soft);">(${diasTxt})</span></button>`
               : `<span class="chip" style="background:#fff;align-self:flex-start;">${label} ${turnoIcons} <span style="color:var(--ink-soft);">(${diasTxt})</span></span>`;
             return `<div>${chip}${otrasTxt}</div>`;
           }).join("")}
@@ -2062,7 +2060,7 @@ function renderDoorDetail() {
       </div>` : ""}
     ${user.role==="jefe" ? `
       <p class="mono" style="font-size:11px;color:var(--ink-soft);margin-bottom:6px;">PEDIR AL PERSONAL DEL PISO</p>
-      <p id="cat-selected-label" style="font-size:11px;color:var(--brass);font-weight:600;margin:0 0 8px;"></p>
+      <p id="cat-selected-label" style="font-size:11px;color:var(--brass);font-weight:600;margin:0 0 8px;">${selectedCatedra ? `Seleccionada: ${esc(selectedCatedra)}` : ""}</p>
       <div style="display:flex;gap:8px;margin-bottom:12px;">
         <button id="det-req-open" ${pr?.type==="open"?"disabled":""} style="flex:1;padding:10px;border-radius:6px;background:var(--green-soft);font-size:13px;font-weight:600;opacity:${pr?.type==="open"?0.5:1};">🚪 Pedir apertura</button>
         <button id="det-req-closed" ${pr?.type==="closed"?"disabled":""} style="flex:1;padding:10px;border-radius:6px;background:var(--red-soft);font-size:13px;font-weight:600;opacity:${pr?.type==="closed"?0.5:1};">🚪 Pedir cierre</button>
@@ -2070,7 +2068,7 @@ function renderDoorDetail() {
       <details id="det-cat-details" style="margin-bottom:16px;" ${catedraDetailsOpen?"open":""}>
         <summary style="font-size:11px;color:var(--ink-soft);cursor:pointer;">¿De qué cátedra es? (opcional, tocá para elegir)</summary>
         <div style="margin-top:10px;">
-          ${catedras.length ? `<div id="det-catedras" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">${catedras.map(c=>{ const aulas = catedraAulas(c); return `<button class="chip det-cat" data-cat="${esc(catedraLabel(c))}">${esc(catedraLabel(c))}${aulas.length?` (${aulas.map(a=>esc(aulaLabel(a))).join(", ")})`:""}</button>`; }).join("")}</div>` : ""}
+          ${catedras.length ? `<div id="det-catedras" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">${catedras.map(c=>{ const aulas = catedraAulas(c); return `<button class="chip det-cat${selectedCatedraId===catedraId(c)?" active":""}" data-cat-id="${esc(catedraId(c))}" data-cat="${esc(catedraLabel(c))}">${esc(catedraLabel(c))}${aulas.length?` (${aulas.map(a=>esc(aulaLabel(a))).join(", ")})`:""}</button>`; }).join("")}</div>` : ""}
           ${totalCatedras > catedras.length ? `<p style="font-size:10px;color:var(--ink-soft);margin:0 0 6px;">Hay ${totalCatedras - catedras.length} cátedra(s) más cargadas para otro turno/día — si es una de esas, escribila de nuevo abajo.</p>` : ""}
           <div style="position:relative;display:flex;gap:6px;margin-bottom:4px;">
             <div style="flex:1;position:relative;">
@@ -2109,7 +2107,7 @@ function renderDoorDetail() {
       doorHist.map(h=>`<div style="font-size:12px;border-top:1px solid #E4DECB;padding:6px 0;"><span style="font-weight:600;">${h.action==="open"?"Abierta":"Cerrada"}</span><span class="mono" style="color:var(--ink-soft);"> · ${fmtTime(h.executedAt)}</span><div style="color:var(--ink-soft);">${h.requestedBy?`pidió ${esc(h.requestedBy)}${h.catedra?` (Cátedra ${esc(h.catedra)})`:""} · `:"sin solicitud (handy) · "}ejecutó ${esc(h.executedBy)}</div></div>`).join("") : ""}
   </div></div>`;
 
-  const close = () => { selectedDoorId = null; selectedCatedra = null; markCleanChecked = false; render(); };
+  const close = () => { selectedDoorId = null; selectedCatedra = null; selectedCatedraId = null; markCleanChecked = false; render(); };
   document.getElementById("sheet-close").onclick = close;
   document.getElementById("sheet-bg").onclick = (e) => { if (e.target.id==="sheet-bg") close(); };
   const catDetailsEl = document.getElementById("det-cat-details");
@@ -2128,7 +2126,23 @@ function renderDoorDetail() {
     if (!confirmIfAlreadyInState([d], type)) return;
     // solo se sugieren las que en verdad necesitan el cambio: nada que ya esté en ese estado,
     // ni nada que ya tenga un pedido pendiente del mismo tipo (para no duplicar ni hacer caminar de más).
-    const others = otherAulasForCatedraLabel(selectedCatedra, d.id).filter(id => {
+    // si se tocó una cátedra de la lista (la que tiene su turno), se sugieren TODAS las aulas de esa cátedra;
+    // si se escribió a mano, se busca por nombre
+    const tapped = selectedCatedraId ? (data.catedras||[]).find(c => catedraId(c) === selectedCatedraId) : null;
+    // solo las aulas de HOY: entradas de esa cátedra (mismo nombre) que corresponden al día de hoy y al mismo turno
+    let candidates;
+    if (tapped) {
+      const today = new Date().getDay(), tt = catedraTurnos(tapped);
+      const sameToday = (data.catedras||[]).filter(c => {
+        if (c !== tapped && catedraLabel(c) !== catedraLabel(tapped)) return false;
+        const dias = catedraDias(c), turnos = catedraTurnos(c);
+        const diaOk = !dias.length || dias.includes(today);
+        const turnoOk = !tt.length || !turnos.length || turnos.some(t => tt.includes(t));
+        return diaOk && turnoOk;
+      });
+      candidates = [...new Set(sameToday.flatMap(catedraAulas))].filter(a => a !== d.id && data.doors[a]);
+    } else candidates = otherAulasForCatedraLabel(selectedCatedra, d.id);
+    const others = candidates.filter(id => {
       const od = data.doors[id];
       if (od.status === type) return false;
       if (od.pendingRequest && od.pendingRequest.type === type) return false;
@@ -2147,8 +2161,10 @@ function renderDoorDetail() {
   if (ro) ro.onclick = () => requestWithRelated("open");
   if (rc) rc.onclick = () => requestWithRelated("closed");
   root.querySelectorAll(".det-cat").forEach(b => b.onclick = () => {
-    selectedCatedra = selectedCatedra===b.dataset.cat ? null : b.dataset.cat;
-    root.querySelectorAll(".det-cat").forEach(x=>x.classList.toggle("active", x.dataset.cat===selectedCatedra));
+    const sameChip = selectedCatedraId && selectedCatedraId === b.dataset.catId;
+    selectedCatedra = sameChip ? null : b.dataset.cat;
+    selectedCatedraId = sameChip ? null : (b.dataset.catId || null);
+    root.querySelectorAll(".det-cat").forEach(x=>x.classList.toggle("active", !!selectedCatedraId && x.dataset.catId===selectedCatedraId));
     document.getElementById("cat-selected-label").textContent = selectedCatedra ? `Seleccionada: ${selectedCatedra}` : "";
   });
   const newCatI = document.getElementById("new-cat-inline"), newCatBtn = document.getElementById("new-cat-inline-btn");
@@ -2159,7 +2175,7 @@ function renderDoorDetail() {
       if (!(data.catedras||[]).some(c => catedraLabel(c) === v)) addCatedra({ name: v, turnos: (user.turnos||[]), dias: [new Date().getDay()] });
     }
     // sin el permiso, la cátedra escrita acá no se suma al catálogo general — queda guardada únicamente en este pedido puntual.
-    selectedCatedra = v; newCatI.value = "";
+    selectedCatedra = v; selectedCatedraId = null; newCatI.value = "";
     document.getElementById("cat-selected-label").textContent = `Seleccionada: ${v}`;
   };
   const anI = document.getElementById("anomaly-text"), anBtn = document.getElementById("anomaly-btn");
