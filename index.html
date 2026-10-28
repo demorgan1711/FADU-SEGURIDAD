@@ -20,6 +20,15 @@
   #app{max-width:480px;margin:0 auto;min-height:100vh;min-height:100dvh;}
   button{font-family:inherit;border:none;cursor:pointer;background:none;}
   input{font-family:inherit;}
+  #save-banner{position:fixed;top:0;left:0;right:0;z-index:9500;padding:calc(18px + env(safe-area-inset-top)) 16px 18px;display:flex;align-items:center;justify-content:center;gap:16px;text-align:center;line-height:1.25;color:#fff;box-shadow:0 6px 24px rgba(0,0,0,.45);}
+  #save-banner.hidden{display:none;}
+  #save-banner .sb-t{display:block;font-size:21px;font-weight:800;letter-spacing:.02em;}
+  #save-banner .sb-s{display:block;font-size:14px;font-weight:500;margin-top:4px;opacity:.95;}
+  #save-dim{position:fixed;inset:0;z-index:9400;background:rgba(15,20,25,.55);}
+  #save-dim.hidden{display:none;}
+  .sb-saving{background:#B7791F;} .sb-offline{background:#B3382C;animation:sbPulse 1s ease-in-out infinite;} .sb-saved{background:#2F7D4F;} .sb-error{background:#7F1D1D;}
+  .sb-spin{width:32px;height:32px;border:5px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:sbSpin .8s linear infinite;flex-shrink:0;}
+  @keyframes sbSpin{to{transform:rotate(360deg)}} @keyframes sbPulse{50%{filter:brightness(1.3)}}
   .header{background:var(--ink);color:#F7F4EC;padding:20px 16px 12px;border-radius:0 0 14px 14px;display:flex;justify-content:space-between;align-items:center;}
   .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;}
   .grid2{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;}
@@ -121,6 +130,8 @@
   </div>
 </div>
 
+<div id="save-dim" class="hidden"></div>
+<div id="save-banner" class="hidden" role="status"></div>
 <div id="detail-root"></div>
 
 <div class="tabs hidden" id="tabs-nav">
@@ -136,7 +147,7 @@
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
-import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+import { getFirestore, doc, getDoc, setDoc, runTransaction, onSnapshot } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-functions.js";
 import { getMessaging, getToken, onMessage, isSupported } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-messaging.js";
 
@@ -153,11 +164,7 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-// Cache local persistente (IndexedDB): si se corta internet, los cambios quedan en cola y sobreviven a un F5
-// o a cerrar la app; se envian solos cuando vuelve la conexion. Si el navegador no lo soporta, funciona como antes.
-let db;
-try { db = initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }); }
-catch (e) { db = getFirestore(app); }
+const db = getFirestore(app);
 const STATE_DOC = doc(db, "app", "estado");
 /* Pegá acá tu clave VAPID (Firebase Console > Configuración del proyecto > Cloud Messaging > Configuración web > Generar par de claves) */
 const VAPID_KEY = "BBZ0n-AuXpY4i7nZxKF3QNhCqNeDioZhfw_oTSSw1nYwWPye54U2OTblOhmF3nxIgoH9qjxONYt8EkpfTFqhF4I";
@@ -170,7 +177,7 @@ const ZONES = [
 ];
 const DELAY_MS = 15 * 60 * 1000;
 
-const APP_VERSION = "1.17.4";
+const APP_VERSION = "1.17.5";
 const VERSION_HISTORY = [
   { version: "1.6.0", changes: [
     "Arreglado un error que dejaba de guardar cambios después de contradecir una solicitud (afectaba solo a esas aulas puntuales).",
@@ -289,7 +296,10 @@ const VERSION_HISTORY = [
     "Nueva pantalla de bienvenida con el logo de la facultad al abrir la app (se saltea tocando la pantalla).",
     "Los jefes ahora pueden eliminar una nota directamente desde Inicio (antes solo estaba en \"Ver todas\").",
     "Corregido: el aula 109 del Sector 100 no tiene TV.",
-    "Mejorado: si se corta la conexión, los cambios hechos quedan guardados en el celular aunque se recargue la página, y se envían solos cuando vuelve internet.",
+  ]},
+  { version: "1.17.5", changes: [
+    "Guardado mucho más seguro: los cambios de distintas personas y dispositivos ya no se pisan entre sí. Cada cambio se aplica sobre lo último que hay guardado.",
+    "Aviso bien visible arriba de la pantalla mientras se guarda (\"Guardando…\"): hay que esperar a que termine antes de cerrar la app o bloquear el teléfono. Si no hay internet, avisa en rojo que el cambio todavía no se guardó y lo reintenta solo.",
   ]},
 ];
 // se mantiene por compatibilidad con el resto del código, siempre apunta a la version mas nueva
@@ -465,16 +475,113 @@ let filterInicio = null;
 let historialFilter = "";
 let saving = false;
 
-async function persist() {
-  saving = true; render();
-  try {
-    const clean = JSON.parse(JSON.stringify(data)); // saca cualquier valor "undefined" que Firestore rechazaría
-    await setDoc(STATE_DOC, clean);
-    document.getElementById("save-error").classList.add("hidden");
-  } catch (e) { document.getElementById("save-error").classList.remove("hidden"); }
-  finally { saving = false; render(); }
+/* ---------- guardado seguro ----------
+   Cada cambio se guarda en una TRANSACCION: primero se lee la version mas reciente del servidor, se le aplica
+   solo el cambio de esta persona y recien ahi se guarda el documento completo. Asi un celular o una compu con
+   una copia desactualizada NUNCA puede pisar lo que hicieron los demas. Los cambios se guardan de a uno, en orden.
+   Si no hay conexion, se reintenta solo y se avisa bien fuerte que todavia NO esta guardado. */
+const clone = (o) => JSON.parse(JSON.stringify(o)); // saca cualquier valor "undefined" que Firestore rechazaria
+function normalizeRaw(raw) {
+  const { sane, repaired } = sanitizeState(raw);
+  const { result: catedras, changed } = ensureCatedraIds(sane.catedras);
+  return { state: { doors: reconcileDoors(sane.doors), staff: sane.staff, history: sane.history, catedras, notes: sane.notes }, needsRepair: repaired || changed };
 }
-function update(mutator) { data = mutator(data); persist(); render(); }
+let pending = [];            // cambios todavia no confirmados por el servidor: { mutator, resolve }
+let pumping = false;
+let saveStatus = "idle";     // idle | saving | offline | error | saved
+let savedTimer = null;
+let saveWaiters = [];
+let wakeSleep = null;
+let wakeLock = null;
+const sleepOrOnline = (ms) => new Promise(r => { const t = setTimeout(done, ms); function done() { clearTimeout(t); wakeSleep = null; r(); } wakeSleep = done; });
+window.addEventListener("online", () => { if (wakeSleep) wakeSleep(); });
+async function lockScreen() { try { if ("wakeLock" in navigator && !wakeLock) { wakeLock = await navigator.wakeLock.request("screen"); wakeLock.addEventListener("release", () => { wakeLock = null; }); } } catch (e) {} }
+function unlockScreen() { try { if (wakeLock) { wakeLock.release(); wakeLock = null; } } catch (e) {} }
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && pending.length) { lockScreen(); if (wakeSleep) wakeSleep(); pump(); } });
+window.addEventListener("beforeunload", (e) => { if (pending.length) { e.preventDefault(); e.returnValue = "Todavia se estan guardando cambios."; return e.returnValue; } });
+
+let savingSince = 0;
+function paintSave() {
+  const b = document.getElementById("save-banner"); if (!b) return;
+  const dim = document.getElementById("save-dim");
+  const n = pending.length;
+  saving = n > 0;
+  if (n && !savingSince) savingSince = Date.now();
+  if (!n) savingSince = 0;
+  let cls = "", html = "", showDim = false;
+  if (n && saveStatus === "offline") {
+    cls = "sb-offline"; showDim = true;
+    html = `<span style="font-size:38px;">⚠️</span><span><span class="sb-t">SIN CONEXIÓN</span><span class="sb-s">Tus cambios (${n}) TODAVÍA NO SE GUARDARON.<br>No cierres la app ni bloquees el teléfono: se guardan solos cuando vuelva internet.</span></span>`;
+  } else if (n) {
+    cls = "sb-saving"; showDim = Date.now() - savingSince > 1500;
+    html = `<span class="sb-spin"></span><span><span class="sb-t">GUARDANDO${n > 1 ? ` (${n})` : ""}…</span><span class="sb-s">No cierres la app ni bloquees el teléfono hasta que termine.</span></span>`;
+  } else if (saveStatus === "error") {
+    cls = "sb-error"; showDim = true;
+    html = `<span style="font-size:38px;">❌</span><span><span class="sb-t">NO SE PUDO GUARDAR</span><span class="sb-s">Revisá que el último cambio se haya aplicado y repetilo si hace falta. (Tocá para cerrar este aviso)</span></span>`;
+  } else if (saveStatus === "saved") {
+    cls = "sb-saved";
+    html = `<span style="font-size:32px;font-weight:800;">✓</span><span><span class="sb-t">GUARDADO</span></span>`;
+  }
+  if (dim) dim.className = showDim ? "" : "hidden";
+  if (!cls) { b.className = "hidden"; b.innerHTML = ""; return; }
+  b.className = cls; b.innerHTML = html;
+  const us = document.getElementById("user-sub");
+  if (us && user) us.textContent = `${user.name} · ${user.role==="jefe"?"Oficina Seguridad":"Pisos"} ${saving?"· guardando…":""}`;
+}
+document.addEventListener("click", (e) => { if (e.target.closest && (e.target.closest("#save-banner.sb-error") || (saveStatus === "error" && e.target.id === "save-dim"))) { saveStatus = "idle"; paintSave(); } });
+
+function isNetworkError(e) {
+  const c = e && e.code ? String(e.code) : "";
+  return c === "unavailable" || c === "deadline-exceeded" || c === "cancelled" || c === "failed-precondition" && /offline/i.test(e.message||"") || (typeof navigator !== "undefined" && navigator.onLine === false) || /offline|network|unavailable/i.test((e && e.message) || "");
+}
+async function pump() {
+  if (pumping) return;
+  pumping = true;
+  lockScreen();
+  let fails = 0;
+  while (pending.length) {
+    const op = pending[0];
+    try {
+      const result = await runTransaction(db, async (tx) => {
+        const snap = await tx.get(STATE_DOC);
+        const base = snap.exists() ? normalizeRaw(snap.data()).state : EMPTY_STATE();
+        const next = op.mutator(base);
+        tx.set(STATE_DOC, clone(next));
+        return next;
+      });
+      pending.shift(); op.resolve(true); fails = 0;
+      if (saveStatus === "offline" || saveStatus === "saving") saveStatus = pending.length ? "saving" : "saved";
+      data = pending.reduce((d, p) => p.mutator(d), result); // lo confirmado + lo que todavia falta guardar
+      render(); paintSave();
+    } catch (e) {
+      console.error("guardado:", e && e.code, e && e.message);
+      if (isNetworkError(e)) { if (saveStatus !== "offline") { try { navigator.vibrate && navigator.vibrate([300, 120, 300]); } catch (e2) {} } saveStatus = "offline"; paintSave(); await sleepOrOnline(2500); continue; }
+      fails++;
+      if (fails >= 3) {
+        pending.shift(); op.resolve(false); fails = 0; saveStatus = "error"; paintSave();
+        try { const snap = await getDoc(STATE_DOC); if (snap.exists()) { data = pending.reduce((d, p) => p.mutator(d), normalizeRaw(snap.data()).state); render(); } } catch (e2) {}
+      } else { await sleepOrOnline(1200); }
+    }
+  }
+  pumping = false;
+  unlockScreen();
+  if (saveStatus === "saved") { clearTimeout(savedTimer); savedTimer = setTimeout(() => { if (saveStatus === "saved") { saveStatus = "idle"; paintSave(); } }, 2200); }
+  paintSave();
+  const w = saveWaiters; saveWaiters = []; w.forEach(f => f());
+}
+function enqueue(mutator) {
+  return new Promise(resolve => {
+    pending.push({ mutator, resolve });
+    clearTimeout(savedTimer);
+    if (saveStatus !== "offline") saveStatus = "saving";
+    paintSave(); pump();
+    setTimeout(paintSave, 1600); // si tarda, aparece el fondo oscuro para que no se pase por alto
+  });
+}
+// espera a que no quede nada sin guardar (por ejemplo antes de cerrar sesion)
+function whenSaved() { return pending.length ? new Promise(r => saveWaiters.push(r)) : Promise.resolve(); }
+// aplica el cambio en pantalla al instante y lo manda a guardar; devuelve una promesa que se resuelve cuando quedo guardado
+function update(mutator) { data = mutator(data); render(); return enqueue(mutator); }
 
 onAuthStateChanged(auth, (u) => { if (!u) signInAnonymously(auth).catch(e => alert("Error de conexión: " + e.message)); else boot(); });
 
@@ -554,33 +661,35 @@ function loadSessionName() {
 function clearSession() { try { localStorage.removeItem(SESSION_KEY); } catch(e){} }
 
 async function boot() {
-  const snap = await getDoc(STATE_DOC);
+  let snap;
+  for (;;) {
+    try { snap = await getDoc(STATE_DOC); break; }
+    catch (e) {
+      const el = document.getElementById("login-content");
+      if (el) el.innerHTML = `<p style="text-align:center;color:var(--red);font-size:13px;font-weight:600;">Sin conexión — reintentando…</p>`;
+      await sleepOrOnline(3000);
+    }
+  }
   let needsRepair = false;
   if (!snap.exists()) {
     data = EMPTY_STATE();
-    await setDoc(STATE_DOC, JSON.parse(JSON.stringify(data)));
+    enqueue(d => d); // crea el documento inicial
   } else {
-    const raw = snap.data();
-    const { sane, repaired } = sanitizeState(raw);
-    const { result: catedras, changed: catChanged } = ensureCatedraIds(sane.catedras);
-    needsRepair = repaired || catChanged;
-    data = { doors: reconcileDoors(sane.doors), staff: sane.staff, history: sane.history, catedras, notes: sane.notes };
+    const n = normalizeRaw(snap.data());
+    data = n.state;
+    needsRepair = n.needsRepair;
   }
   loaded = true;
-  if (needsRepair) {
-    try { await setDoc(STATE_DOC, JSON.parse(JSON.stringify(data))); } catch (e) {}
-  }
+  if (needsRepair) enqueue(d => d); // guarda ya reparado
   const savedName = loadSessionName();
   if (savedName && data.staff[savedName]) { loginAs(savedName, data.staff[savedName]); }
   else { render(); }
   onSnapshot(STATE_DOC, (snap) => {
     if (!snap.exists()) return;
-    const raw = snap.data();
-    const { sane, repaired } = sanitizeState(raw);
-    const { result: catedras, changed: catChanged } = ensureCatedraIds(sane.catedras);
-    data = { doors: reconcileDoors(sane.doors), staff: sane.staff, history: sane.history, catedras, notes: sane.notes };
+    const n = normalizeRaw(snap.data());
+    data = pending.reduce((d, p) => p.mutator(d), n.state); // lo del servidor + mis cambios todavia sin confirmar
     render();
-    if (repaired || catChanged) { try { setDoc(STATE_DOC, JSON.parse(JSON.stringify(data))); } catch (e) {} }
+    if (n.needsRepair && !pending.length) enqueue(d => d);
   });
 }
 
@@ -663,8 +772,9 @@ function renderLogin() {
       btn.onclick = () => {
         if (pinI.value !== pinC.value) { document.getElementById("pin-error").classList.remove("hidden"); return; }
         const updated = { ...s, pin: pinI.value };
-        update(prev => ({ ...prev, staff: { ...prev.staff, [loginSelectedName]: updated } }));
-        loginAs(loginSelectedName, updated);
+        const nm = loginSelectedName;
+        update(prev => ({ ...prev, staff: { ...prev.staff, [nm]: updated } }));
+        loginAs(nm, updated);
       };
       document.getElementById("pin-back").onclick = () => { loginSelectedName = null; renderLogin(); };
     } else {
@@ -790,6 +900,10 @@ document.getElementById("btn-logout").onclick = async () => {
       await unassignZonesFor(names);
     }
   }
+  if (pending.length) {
+    if (saveStatus === "offline" && !confirm("Hay cambios que TODAVÍA NO SE GUARDARON (sin conexión). Si salís ahora se pierden. ¿Salir igual?")) return;
+    if (saveStatus !== "offline") await whenSaved();
+  }
   clearSession(); location.reload();
 };
 document.querySelectorAll(".tab-btn").forEach(btn => btn.onclick = () => {
@@ -880,9 +994,7 @@ function saveStaff(name, fields) { update(prev => ({ ...prev, staff: { ...prev.s
 // (await) a que termine, por ejemplo antes de cerrar sesión, para no cortar el guardado a mitad de camino.
 async function unassignZonesFor(names) {
   if (!names.length) return;
-  data = { ...data, staff: { ...data.staff, ...Object.fromEntries(names.map(n => [n, { ...data.staff[n], zones: [] }])) } };
-  render();
-  await persist();
+  await update(prev => ({ ...prev, staff: { ...prev.staff, ...Object.fromEntries(names.filter(n => prev.staff[n]).map(n => [n, { ...prev.staff[n], zones: [] }])) } }));
 }
 function deleteStaff(name) { update(prev => { const s = {...prev.staff}; delete s[name]; return {...prev, staff:s}; }); }
 function addCatedra(cObj) {
@@ -1155,15 +1267,17 @@ function startSelection(id) { selectionMode = true; selectedIds = [id]; render()
 function toggleSelect(id) { selectedIds = selectedIds.includes(id) ? selectedIds.filter(x=>x!==id) : [...selectedIds, id]; render(); }
 function clearSelection() { selectionMode = false; selectedIds = []; render(); }
 function bulkRequest(type) {
-  update(prev => { const doors = {...prev.doors}; selectedIds.forEach(id => { doors[id] = {...doors[id], pendingRequest:{type, requestedBy:user.name, requestedAt:now(), catedra:null}}; }); return {...prev, doors}; });
+  const ids = [...selectedIds];
+  update(prev => { const doors = {...prev.doors}; ids.forEach(id => { doors[id] = {...doors[id], pendingRequest:{type, requestedBy:user.name, requestedAt:now(), catedra:null}}; }); return {...prev, doors}; });
   clearSelection();
 }
 function bulkMark(status, clean, keyHolders) {
   const finalHolders = keyHolders !== undefined ? keyHolders : ((status==="open" && user.role==="recorrido") ? [user.name] : []);
+  const ids = [...selectedIds];
   update(prev => {
     const doors = {...prev.doors}; const entries = [];
     let staff = prev.staff;
-    selectedIds.forEach(id => {
+    ids.forEach(id => {
       const d = doors[id]; const pr = d.pendingRequest;
       entries.push({ id:`${id}-${now()}-${Math.random().toString(36).slice(2,6)}`, doorId:id, doorLabel:d.label, action:status, requestedBy:pr?pr.requestedBy:null, requestedAt:pr?pr.requestedAt:null, catedra: (pr && pr.catedra) ? pr.catedra : null, executedBy:user.name, executedAt:now() });
       doors[id] = { ...d, status, keyHolders: status==="open" ? finalHolders : [], pendingRequest:null, clean: status==="closed" ? !!clean : false };
@@ -1175,7 +1289,7 @@ function bulkMark(status, clean, keyHolders) {
         });
       }
     });
-    selectedIds.forEach(id => { staff = autoPlaceInSector(staff, doors[id].sector); });
+    ids.forEach(id => { staff = autoPlaceInSector(staff, doors[id].sector); });
     return { ...prev, staff, doors, history: [...entries, ...prev.history].slice(0,300) };
   });
   clearSelection();
