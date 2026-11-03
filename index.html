@@ -32,6 +32,9 @@
   .header{background:var(--ink);color:#F7F4EC;padding:20px 16px 12px;border-radius:0 0 14px 14px;display:flex;justify-content:space-between;align-items:center;}
   .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;}
   .grid2{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;}
+  .plate.entrega{background:#EDE3F8;border:2px solid #6B3FA0;}
+  .plate.entrega-vencida{background:#FFF4D6;border:2px solid #C98A00;}
+  .plate.entrega-open{background:#FBE4E1;border:2px solid var(--red);}
   .plate{position:relative;background:#F7F4EC;border:1px solid #D8CFB8;border-radius:8px;aspect-ratio:1/0.85;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:6px 4px;user-select:none;-webkit-touch-callout:none;touch-action:manipulation;}
   .dot{width:10px;height:10px;border-radius:999px;margin-bottom:4px;}
   @keyframes pulseG{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(63,143,95,.5)}50%{opacity:.45;box-shadow:0 0 0 7px rgba(63,143,95,0)}}
@@ -183,7 +186,7 @@ const ZONES = [
 ];
 const DELAY_MS = 15 * 60 * 1000;
 
-const APP_VERSION = "1.17.6";
+const APP_VERSION = "1.17.8";
 const VERSION_HISTORY = [
   { version: "1.6.0", changes: [
     "Arreglado un error que dejaba de guardar cambios después de contradecir una solicitud (afectaba solo a esas aulas puntuales).",
@@ -301,6 +304,9 @@ const VERSION_HISTORY = [
     "El aula EP106 ahora lleva un 📺 rojo: no tiene TV, pero su llave está en el manojo de las aulas con TV.",
     "Corregido: el aula 109 del Sector 100 no tiene TV.",
     "Nueva pantalla de bienvenida con el logo de la facultad, una vez por día (se saltea tocando la pantalla).",
+  ]},
+  { version: "1.17.8", changes: [
+    "Nuevo: aulas \"con entrega\" (maquetas, proyectos, etc.). Las marcan solo los jefes, indicando desde qué día hasta qué día y qué cátedra tiene la entrega (que puede no ser la habitual del aula). Se ven resaltadas en violeta con 📦 y la fecha en que se liberan, porque deben estar siempre cerradas salvo que el docente firme el libro de apertura en la guardia. Aparecen listadas en Inicio; si una está abierta se destaca en rojo, y si ya pasó la fecha se avisa para confirmar la liberación.",
   ]},
 ];
 // se mantiene por compatibilidad con el resto del código, siempre apunta a la version mas nueva
@@ -607,6 +613,7 @@ function reconcileDoors(storedDoors) {
       pendingRequest: pr,
       clean: s ? !!s.clean : c.clean,
       anomalies: s && s.anomalies ? s.anomalies : c.anomalies,
+      entrega: s && s.entrega ? s.entrega : null, // aula 'con entrega' (la marcan solo los jefes)
     };
   });
   return result;
@@ -949,6 +956,103 @@ function autoPlaceInSector(staff, sector) {
   if (!me || (me.zones||[]).length) return staff;
   user.zones = [sector];
   return { ...staff, [user.name]: { ...me, zones: [sector] } };
+}
+// Aulas "con entrega" (maquetas, proyectos, etc.): deben estar siempre cerradas. Solo los jefes las marcan.
+// d.entrega = { since, by, desde:"AAAA-MM-DD", hasta:"AAAA-MM-DD", catedra }
+function localDateStr(d) { d = d || new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
+function fmtDM(str) { if (!str) return ""; const p = str.split("-"); return `${p[2]}/${p[1]}`; }
+// "activa" (rige hoy), "proxima" (todavía no empezó) o "vencida" (ya pasó la fecha "hasta": un jefe tiene que confirmar la liberación)
+function entregaState(e) {
+  if (!e) return null;
+  const today = localDateStr();
+  if (e.hasta && e.hasta < today) return "vencida";
+  if (e.desde && e.desde > today) return "proxima";
+  return "activa";
+}
+function entregaRango(e) {
+  if (!e) return "";
+  if (e.desde && e.hasta) return `del ${fmtDM(e.desde)} al ${fmtDM(e.hasta)}`;
+  if (e.hasta) return `hasta el ${fmtDM(e.hasta)}`;
+  if (e.desde) return `desde el ${fmtDM(e.desde)}`;
+  return "";
+}
+function setEntrega(ids, entrega) {
+  if (!(user && (user.role === "jefe" || isSuperuser(user)))) return;
+  const list = [...ids], val = entrega ? { ...entrega } : null;
+  update(prev => {
+    const doors = { ...prev.doors };
+    list.forEach(id => { if (doors[id]) doors[id] = { ...doors[id], entrega: val }; });
+    return { ...prev, doors };
+  });
+}
+// al abrir un aula con entrega sin que haya una solicitud de apertura, pide confirmar (el docente firma el libro en la guardia)
+function confirmEntregaOpen(doorsArr) {
+  const risky = doorsArr.filter(d => entregaState(d.entrega) === "activa" && !(d.pendingRequest && d.pendingRequest.type === "open"));
+  if (!risky.length) return true;
+  const names = risky.map(d => d.label).join(", ");
+  return confirm(`📦 ${names}: CON ENTREGA — debe estar siempre cerrada y NO hay una solicitud de apertura. Solo se abre si el docente firmó el libro de apertura en la guardia. ¿Confirmás que se abra?`);
+}
+function confirmEntregaRequest(doorsArr) {
+  const list = doorsArr.filter(d => entregaState(d.entrega) === "activa");
+  if (!list.length) return true;
+  return confirm(`📦 ${list.map(d=>d.label).join(", ")}: CON ENTREGA. ¿El docente ya firmó el libro de apertura en la guardia?`);
+}
+// hoja para cargar / editar la entrega: cátedra, desde y hasta (solo jefes)
+function openEntregaSheet(ids, fromSelection) {
+  if (!(user && (user.role === "jefe" || isSuperuser(user)))) return;
+  const list = [...ids];
+  const single = list.length === 1 ? data.doors[list[0]] : null;
+  const ex = single && single.entrega ? single.entrega : null;
+  const root = document.getElementById("detail-root");
+  const labels = list.map(id => data.doors[id] && data.doors[id].label).filter(Boolean).join(", ");
+  root.innerHTML = `<div class="sheet" id="entrega-sheet-bg"><div class="sheet-inner">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <h2 class="display" style="font-size:20px;font-weight:700;margin:0;color:#6B3FA0;">📦 Aula con entrega</h2>
+        <button id="ent-close" style="font-size:20px;">✕</button>
+      </div>
+      <p style="font-size:12px;color:var(--ink-soft);margin:0 0 14px;">${esc(labels)}</p>
+      <label class="mono" style="font-size:11px;color:var(--ink-soft);">CÁTEDRA QUE TIENE LA ENTREGA (opcional)</label>
+      <div style="position:relative;margin:6px 0 4px;">
+        <input id="ent-cat" value="${esc(ex && ex.catedra ? ex.catedra : "")}" placeholder="Escribí para buscar" autocomplete="off" style="width:100%;border:1px solid #D8CFB8;border-radius:8px;padding:11px 12px;font-size:14px;" />
+        <div id="ent-cat-sug" class="hidden" style="position:absolute;left:0;right:0;top:100%;background:#fff;border:1px solid #D8CFB8;border-radius:8px;max-height:160px;overflow-y:auto;z-index:5;margin-top:2px;"></div>
+      </div>
+      <p style="font-size:10px;color:var(--ink-soft);margin:0 0 14px;">Puede ser una cátedra que normalmente no usa esta aula.</p>
+      <div style="display:flex;gap:10px;margin-bottom:6px;">
+        <div style="flex:1;"><label class="mono" style="font-size:11px;color:var(--ink-soft);">DESDE</label>
+          <input id="ent-desde" type="date" value="${ex && ex.desde ? ex.desde : localDateStr()}" style="width:100%;border:1px solid #D8CFB8;border-radius:8px;padding:10px;font-size:14px;margin-top:6px;" /></div>
+        <div style="flex:1;"><label class="mono" style="font-size:11px;color:var(--ink-soft);">HASTA (último día)</label>
+          <input id="ent-hasta" type="date" value="${ex && ex.hasta ? ex.hasta : ""}" style="width:100%;border:1px solid #D8CFB8;border-radius:8px;padding:10px;font-size:14px;margin-top:6px;" /></div>
+      </div>
+      <p id="ent-err" class="hidden" style="font-size:11px;color:var(--red);margin:4px 0 0;">Elegí la fecha "hasta", y que no sea anterior al "desde".</p>
+      <button id="ent-save" style="width:100%;margin-top:14px;padding:13px;border-radius:8px;background:#6B3FA0;color:#fff;font-weight:700;font-size:14px;">Guardar</button>
+      ${ex ? `<button id="ent-remove" style="width:100%;margin-top:10px;padding:12px;border-radius:8px;color:var(--red);font-weight:600;font-size:13px;border:1px solid var(--red-soft);">Quitar "con entrega" (liberar el aula)</button>` : ""}
+    </div></div>`;
+  const close = () => { root.innerHTML = ""; render(); };
+  document.getElementById("ent-close").onclick = close;
+  document.getElementById("entrega-sheet-bg").onclick = (e) => { if (e.target.id === "entrega-sheet-bg") close(); };
+  // sugerencias de cátedras ya cargadas
+  const inp = document.getElementById("ent-cat"), sug = document.getElementById("ent-cat-sug");
+  const labelsCat = [...new Set((data.catedras || []).map(c => catedraLabel(c)))];
+  inp.addEventListener("input", () => {
+    const q = inp.value.trim().toLowerCase();
+    const m = q ? labelsCat.filter(n => n.toLowerCase().includes(q)).slice(0, 6) : [];
+    if (!m.length) { sug.innerHTML = ""; sug.classList.add("hidden"); return; }
+    sug.innerHTML = m.map(n => `<button type="button" class="ent-sug" data-name="${esc(n)}" style="display:block;width:100%;padding:8px 10px;border-bottom:1px solid #E4DECB;text-align:left;background:#fff;font-size:13px;">${esc(n)}</button>`).join("");
+    sug.classList.remove("hidden");
+    sug.querySelectorAll(".ent-sug").forEach(b => b.onclick = () => { inp.value = b.dataset.name; sug.innerHTML = ""; sug.classList.add("hidden"); });
+  });
+  inp.addEventListener("blur", () => setTimeout(() => sug.classList.add("hidden"), 150));
+  document.getElementById("ent-save").onclick = () => {
+    const desde = document.getElementById("ent-desde").value || localDateStr();
+    const hasta = document.getElementById("ent-hasta").value;
+    if (!hasta || hasta < desde) { document.getElementById("ent-err").classList.remove("hidden"); return; }
+    const catedra = inp.value.trim() || null;
+    setEntrega(list, { since: (ex && ex.since) || now(), by: user.name, desde, hasta, catedra });
+    root.innerHTML = "";
+    if (fromSelection) clearSelection(); else render();
+  };
+  const rm = document.getElementById("ent-remove");
+  if (rm) rm.onclick = () => { if (confirm(`¿Quitar "con entrega" de ${labels}? El aula queda liberada.`)) { setEntrega(list, null); root.innerHTML = ""; render(); } };
 }
 function markDoor(doorId, status, clean, keyHolders) {
   update(prev => {
@@ -1316,14 +1420,20 @@ function plateHTML(d) {
   }
   const selected = selectedIds.includes(d.id);
   const hasNotes = (data.notes||[]).some(n => n.doorIds && n.doorIds.includes(d.id));
-  return `<button class="plate" data-door="${d.id}"
+  const eSt = entregaState(d.entrega);
+  const entregaOpen = eSt === "activa" && d.status === "open";
+  let entregaTag = "";
+  if (eSt === "activa") entregaTag = `<span class="mono" style="font-size:8px;font-weight:800;margin-top:2px;color:${entregaOpen?"var(--red)":"#6B3FA0"};text-align:center;line-height:1.1;">📦 ${entregaOpen?"¡ABIERTA!":"ENTREGA"}${d.entrega.hasta ? `<br>hasta ${fmtDM(d.entrega.hasta)}` : ""}</span>`;
+  else if (eSt === "proxima") entregaTag = `<span class="mono" style="font-size:8px;font-weight:700;margin-top:2px;color:#6B3FA0;text-align:center;">📦 desde ${fmtDM(d.entrega.desde)}</span>`;
+  else if (eSt === "vencida") entregaTag = `<span class="mono" style="font-size:8px;font-weight:800;margin-top:2px;color:#9A6700;text-align:center;line-height:1.1;">📦 venció ${fmtDM(d.entrega.hasta)}</span>`;
+  return `<button class="plate${eSt === "activa" ? (entregaOpen ? " entrega-open" : " entrega") : eSt === "vencida" ? " entrega-vencida" : ""}" data-door="${d.id}"
       style="${selected?'background:var(--brass-soft);border-color:var(--brass);border-width:2px;':''}">
     ${d.hasTV ? '<span style="position:absolute;top:3px;left:3px;font-size:10px;">📺</span>' : d.tvKeyOnly ? '<span title="Sin TV, pero su llave está en el manojo de TV" style="position:absolute;top:2px;left:2px;font-size:9px;background:var(--red);border-radius:3px;padding:0 2px;line-height:12px;">📺</span>' : ''}
     ${(d.anomalies||[]).some(a=>!a.resolved) ? '<span style="position:absolute;bottom:3px;right:3px;font-size:10px;">⚠️</span>' : ''}
     ${d.status==="closed" && d.clean ? '<span style="position:absolute;bottom:3px;left:3px;font-size:10px;">✅</span>' : ''}
     ${selectionMode ? `<span style="position:absolute;top:3px;right:3px;width:14px;height:14px;border-radius:4px;border:1px solid var(--brass);background:${selected?'var(--brass)':'#fff'};color:#fff;font-size:9px;display:flex;align-items:center;justify-content:center;">${selected?'✓':''}</span>` : (hasNotes ? '<span style="position:absolute;top:3px;right:3px;font-size:10px;">📝</span>' : '')}
     <span class="dot ${dotClass}" style="background:${dotColor}"></span>
-    <span class="mono" style="font-size:11px;font-weight:600;text-align:center;line-height:1.1;">${esc(d.label)}</span>${tag}
+    <span class="mono" style="font-size:11px;font-weight:600;text-align:center;line-height:1.1;">${esc(d.label)}</span>${tag}${entregaTag}
   </button>`;
 }
 function bindPlates(root) {
@@ -1426,6 +1536,16 @@ function renderInicio(allDoors, pendingList) {
       </div>`).join("") + `</div>`;
   }
 
+  const entregaDoors = allDoors.filter(d => d.entrega).sort((a,b) => (a.entrega.hasta||"9999").localeCompare(b.entrega.hasta||"9999"));
+  if (entregaDoors.length) {
+    html += `<div class="card" style="margin-bottom:16px;background:#EDE3F8;border:2px solid #6B3FA0;">
+      <p style="font-size:13px;font-weight:800;color:#6B3FA0;margin:0 0 2px;">📦 Aulas con entrega (${entregaDoors.length})</p>
+      <p style="font-size:11px;color:var(--ink-soft);margin:0 0 8px;">Siempre cerradas, salvo que el docente firme el libro de apertura en la guardia y lo solicite.</p>
+      ${entregaDoors.map(d => { const st = entregaState(d.entrega); return `<button data-door="${d.id}" class="row-btn" style="background:#fff;align-items:flex-start;"><span style="font-size:13px;font-weight:600;text-align:left;">${esc(d.label)} <span style="color:var(--ink-soft);font-weight:400;">· ${esc(d.sectorLabel)}</span>
+          <span style="display:block;font-size:11px;font-weight:400;color:${st==="vencida"?"#9A6700":"var(--ink-soft)"};">${st==="vencida" ? "⚠️ venció el " + fmtDM(d.entrega.hasta) + " — confirmar liberación" : esc(entregaRango(d.entrega))}${d.entrega.catedra ? " · " + esc(d.entrega.catedra) : ""}</span></span>
+          <span style="font-size:11px;font-weight:700;white-space:nowrap;color:${d.status==="open"?"var(--red)":"#2F7D4F"};">${d.status==="open"?"🔓 ABIERTA":"🔒 cerrada"}</span></button>`; }).join("")}
+    </div>`;
+  }
   html += `<p class="display" style="font-size:18px;font-weight:700;margin-bottom:10px;">Resumen</p>
     <div class="grid2" style="margin-bottom:12px;">
       <button data-filter="abiertas" class="card" style="text-align:left;${filterInicio==='abiertas'?'background:var(--brass-soft);border-color:var(--brass);':''}"><p style="font-size:22px;font-weight:700;color:var(--green);margin:0;">${openCount}</p><p style="font-size:11px;color:var(--ink-soft);margin:2px 0 0;">Puertas abiertas</p></button>
@@ -1495,6 +1615,7 @@ function renderSectores(allDoors) {
       <span>📺 tiene TV</span>
       <span><span style="background:var(--red);border-radius:3px;padding:0 2px;">📺</span> sin TV, llave en manojo de TV</span>
       <span>✅ cerrada y limpia</span>
+      <span><span style="background:#EDE3F8;border:1px solid #6B3FA0;border-radius:3px;padding:0 2px;">📦</span> con entrega (siempre cerrada)</span>
       <span>⚠️ anomalía sin resolver</span>
       <span>📝 tiene notas</span>
       <span>🔴/🟢 parpadeo = piden cerrar/abrir</span>
@@ -1806,6 +1927,10 @@ function renderSelectionBar(pendingList) {
         <summary style="font-size:12px;font-weight:600;color:var(--ink);cursor:pointer;">¿Ya lo hicieron por handy? Marcar directamente</summary>
         <div style="margin-top:8px;">${markSectionJefe}</div>
       </details>` : markSectionPisos}
+      ${(user.role==="jefe"||isSuperuser(user)) ? `<div style="display:flex;gap:8px;margin-bottom:8px;">
+        <button id="sel-entrega-on" style="flex:1;padding:8px;border-radius:6px;border:1px solid #6B3FA0;color:#6B3FA0;font-size:12px;font-weight:700;background:#fff;">📦 Marcar con entrega</button>
+        <button id="sel-entrega-off" style="flex:1;padding:8px;border-radius:6px;border:1px solid #D8CFB8;color:var(--ink-soft);font-size:12px;font-weight:600;background:#fff;">Quitar entrega</button>
+      </div>` : ""}
       <button id="sel-add-note" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--brass);font-size:12px;font-weight:600;">📝 Agregar nota para estas aulas</button>
     </div>`;
   document.body.appendChild(div);
@@ -1817,14 +1942,18 @@ function renderSelectionBar(pendingList) {
   const markOpenSelBtn = document.getElementById("sel-mark-open"), markClosedSelBtn = document.getElementById("sel-mark-closed");
   if (markOpenSelBtn) markOpenSelBtn.onclick = () => {
     const doorsArr = selectedIds.map(id=>data.doors[id]);
+    if (!confirmEntregaOpen(doorsArr)) return;
     if (!confirmIfMismatch(doorsArr, "open")) return;
     const holders = selKhWidget ? selKhWidget.getSelected() : (user.role === "recorrido" ? [user.name] : []);
     bulkMark("open", false, holders);
   };
   if (markClosedSelBtn) markClosedSelBtn.onclick = () => { const doorsArr = selectedIds.map(id=>data.doors[id]); if (confirmIfMismatch(doorsArr, "closed")) bulkMark("closed", document.getElementById("sel-clean").checked); };
   const ro = document.getElementById("sel-req-open"), rc = document.getElementById("sel-req-closed");
-  if (ro) ro.onclick = () => { const doorsArr = selectedIds.map(id=>data.doors[id]); if (confirmIfAlreadyInState(doorsArr, "open")) bulkRequest("open"); };
+  if (ro) ro.onclick = () => { const doorsArr = selectedIds.map(id=>data.doors[id]); if (confirmIfAlreadyInState(doorsArr, "open") && confirmEntregaRequest(doorsArr)) bulkRequest("open"); };
   if (rc) rc.onclick = () => { const doorsArr = selectedIds.map(id=>data.doors[id]); if (confirmIfAlreadyInState(doorsArr, "closed")) bulkRequest("closed"); };
+  const eOn = document.getElementById("sel-entrega-on"), eOff = document.getElementById("sel-entrega-off");
+  if (eOn) eOn.onclick = () => openEntregaSheet(selectedIds, true);
+  if (eOff) eOff.onclick = () => { if (confirm(`¿Quitar "con entrega" de ${selectedIds.length} aula(s)?`)) { setEntrega(selectedIds, null); clearSelection(); } };
   document.getElementById("sel-add-note").onclick = () => { noteDraftIds = [...selectedIds]; renderNoteSheet(); };
 }
 
@@ -2008,7 +2137,7 @@ let selectedCatedra = null, selectedCatedraId = null, markCleanChecked = false, 
 // si cualquiera de estas está abierta, renderDoorDetail no tiene que pisarla — sino, cualquier
 // actualización de datos en tiempo real (de cualquier usuario, en cualquier parte de la app)
 // las cerraba solas antes de que se llegaran a leer.
-const OTHER_MODAL_IDS = ["all-notes-bg", "version-popup-bg", "full-changelog-bg", "staff-sheet-bg", "cat-sheet-bg", "note-sheet-bg"];
+const OTHER_MODAL_IDS = ["all-notes-bg", "version-popup-bg", "full-changelog-bg", "staff-sheet-bg", "cat-sheet-bg", "note-sheet-bg", "entrega-sheet-bg"];
 function renderDoorDetail() {
   const root = document.getElementById("detail-root");
   if (OTHER_MODAL_IDS.some(id => document.getElementById(id))) return;
@@ -2051,6 +2180,15 @@ function renderDoorDetail() {
         </div>
       </div>`;
     })()}
+    ${d.entrega ? (() => { const st = entregaState(d.entrega); const e = d.entrega;
+      const col = st==="vencida" ? "#9A6700" : "#6B3FA0", bg = st==="vencida" ? "#FFF4D6" : "#EDE3F8", bd = st==="vencida" ? "#C98A00" : "#6B3FA0";
+      return `<div class="card" style="margin-bottom:16px;background:${bg};border:2px solid ${bd};">
+        <p style="font-size:13px;font-weight:800;margin:0;color:${col};">📦 AULA CON ENTREGA${st==="proxima" ? " (próxima)" : st==="vencida" ? " — VENCIDA" : ""}</p>
+        ${e.catedra ? `<p style="font-size:13px;font-weight:700;margin:6px 0 0;">Cátedra: ${esc(e.catedra)}</p>` : ""}
+        ${entregaRango(e) ? `<p style="font-size:13px;margin:4px 0 0;">📅 Con entrega ${esc(entregaRango(e))}${st==="activa" && e.hasta ? ` · <b>se libera después del ${fmtDM(e.hasta)}</b>` : ""}</p>` : ""}
+        ${st==="vencida" ? `<p style="font-size:12px;margin:6px 0 0;color:${col};font-weight:600;">Ya pasó la fecha de entrega. Un jefe tiene que confirmar la liberación del aula.</p>` : `<p style="font-size:12px;margin:6px 0 0;">Debe permanecer <b>siempre cerrada</b>. Solo se abre si el docente firma el libro de apertura en la guardia y lo solicita.</p>`}
+        ${e.by ? `<p style="font-size:10px;color:var(--ink-soft);margin:6px 0 0;">Cargada por ${esc(e.by)}${e.since ? " · " + elapsed(e.since) : ""}</p>` : ""}</div>`; })() : ""}
+    ${(user.role==="jefe"||isSuperuser(user)) ? `<button id="det-entrega-btn" style="width:100%;padding:10px;border-radius:6px;border:1px solid #6B3FA0;color:#6B3FA0;font-size:12px;font-weight:700;margin-bottom:16px;background:#fff;">${d.entrega ? "📦 Editar o quitar la entrega" : "📦 Marcar aula CON ENTREGA"}</button>` : ""}
     ${d.tvKeyOnly ? `<div class="card" style="margin-bottom:16px;background:#F1ECDD;border-color:var(--red);"><p style="font-size:12px;margin:0;color:var(--red);font-weight:600;">📺 No tiene TV, pero su llave está en el manojo de las aulas con TV.</p></div>` : ""}
     ${d.hasTV ? `<div class="card" style="margin-bottom:16px;background:#F1ECDD;"><p style="font-size:12px;margin:0;">📺 Tiene TV — extremar el cuidado al cerrar.</p></div>` : ""}
     ${d.status==="closed" && d.clean ? `<div class="card" style="margin-bottom:16px;background:var(--green-soft);"><p style="font-size:12px;margin:0;">✅ Quedó cerrada y limpia — limpieza no necesita revisarla.</p></div>` : ""}
@@ -2114,8 +2252,11 @@ function renderDoorDetail() {
   if (catDetailsEl) catDetailsEl.addEventListener("toggle", () => { catedraDetailsOpen = catDetailsEl.open; });
   // jefes: eligen quien tiene la llave con el desplegable. Pisos: se asigna a si mismo automaticamente, sin verlo.
   const detKhWidget = document.getElementById("det-keyholders") ? bindKeyHolderPicker("det-keyholders", d.sector, []) : null;
+  const entBtn = document.getElementById("det-entrega-btn");
+  if (entBtn) entBtn.onclick = () => openEntregaSheet([d.id], false);
   const markOpenBtn = document.getElementById("det-mark-open"), markClosedBtn = document.getElementById("det-mark-closed");
   if (markOpenBtn) markOpenBtn.onclick = () => {
+    if (!confirmEntregaOpen([d])) return;
     if (!confirmIfMismatch([d], "open")) return;
     const holders = detKhWidget ? detKhWidget.getSelected() : (user.role === "recorrido" ? [user.name] : []);
     markDoor(d.id, "open", false, holders);
@@ -2124,6 +2265,7 @@ function renderDoorDetail() {
   const ro = document.getElementById("det-req-open"), rc = document.getElementById("det-req-closed");
   const requestWithRelated = (type) => {
     if (!confirmIfAlreadyInState([d], type)) return;
+    if (type === "open" && !confirmEntregaRequest([d])) return;
     // solo se sugieren las que en verdad necesitan el cambio: nada que ya esté en ese estado,
     // ni nada que ya tenga un pedido pendiente del mismo tipo (para no duplicar ni hacer caminar de más).
     // si se tocó una cátedra de la lista (la que tiene su turno), se sugieren TODAS las aulas de esa cátedra;
