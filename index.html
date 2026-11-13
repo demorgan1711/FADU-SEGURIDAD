@@ -186,7 +186,7 @@ const ZONES = [
 ];
 const DELAY_MS = 15 * 60 * 1000;
 
-const APP_VERSION = "1.17.8";
+const APP_VERSION = "1.17.9";
 const VERSION_HISTORY = [
   { version: "1.6.0", changes: [
     "Arreglado un error que dejaba de guardar cambios después de contradecir una solicitud (afectaba solo a esas aulas puntuales).",
@@ -307,6 +307,9 @@ const VERSION_HISTORY = [
   ]},
   { version: "1.17.8", changes: [
     "Nuevo: aulas \"con entrega\" (maquetas, proyectos, etc.). Las marcan solo los jefes, indicando desde qué día hasta qué día y qué cátedra tiene la entrega (que puede no ser la habitual del aula). Se ven resaltadas en violeta con 📦 y la fecha en que se liberan, porque deben estar siempre cerradas salvo que el docente firme el libro de apertura en la guardia. Aparecen listadas en Inicio; si una está abierta se destaca en rojo, y si ya pasó la fecha se avisa para confirmar la liberación.",
+  ]},
+  { version: "1.17.9", changes: [
+    "Corregido: cuando fallaba internet, la app podía abrirse en una versión vieja (sin los cambios nuevos, como las aulas con entrega). Ahora siempre guarda la última versión y se actualiza sola apenas hay conexión. Si hay una versión nueva con la app abierta, aparece un aviso abajo para actualizar.",
   ]},
 ];
 // se mantiene por compatibilidad con el resto del código, siempre apunta a la version mas nueva
@@ -2325,7 +2328,56 @@ function renderDoorDetail() {
   root.querySelectorAll("[data-resolve]").forEach(b => b.onclick = () => resolveAnomaly(d.id, b.dataset.resolve));
 }
 
-if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("firebase-messaging-sw.js").catch(()=>{}));
+// ---- actualización automática ----
+// el service worker guarda siempre la última versión buena, y acá se compara contra la del servidor:
+// si hay una más nueva se avisa abajo, y se recarga sola al volver a la app (si no hay nada sin guardar).
+let swReg = null;
+let updateAvailable = false;
+function showUpdateBanner(v) {
+  updateAvailable = true;
+  if (document.getElementById("update-banner")) return;
+  const b = document.createElement("div");
+  b.id = "update-banner";
+  b.style.cssText = "position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#22303C;color:#fff;padding:14px 16px calc(14px + env(safe-area-inset-bottom, 0px));text-align:center;font-weight:700;font-size:15px;cursor:pointer;box-shadow:0 -2px 12px rgba(0,0,0,.25);";
+  b.textContent = "Hay una versión nueva (" + v + "). Tocá acá para actualizar.";
+  b.onclick = () => {
+    if (pending.length) { alert("Todavía se están guardando cambios. Esperá a que termine y volvé a tocar."); return; }
+    location.reload();
+  };
+  document.body.appendChild(b);
+}
+async function checkNewVersion() {
+  try {
+    if (navigator.onLine === false) return;
+    const r = await fetch("index.html", { cache: "no-store" });
+    if (!r.ok) return;
+    const m = (await r.text()).match(/const APP_VERSION = "([^"]+)"/);
+    if (m && m[1] !== APP_VERSION) showUpdateBanner(m[1]);
+  } catch (e) {}
+}
+function updateSw() { try { if (swReg) swReg.update().catch(() => {}); } catch (e) {} }
+if ("serviceWorker" in navigator) {
+  const hadController = !!navigator.serviceWorker.controller;
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("firebase-messaging-sw.js", { updateViaCache: "none" })
+      .then((reg) => { swReg = reg; updateSw(); })
+      .catch(() => {});
+    setTimeout(checkNewVersion, 3000);
+  });
+  navigator.serviceWorker.addEventListener("controllerchange", () => { if (hadController) checkNewVersion(); });
+  window.addEventListener("online", () => { updateSw(); checkNewVersion(); });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    const last = Number(sessionStorage.getItem("fadu-upd-reload") || 0);
+    if (updateAvailable && !pending.length && saveStatus !== "offline" && navigator.onLine !== false && Date.now() - last > 60000) {
+      try { sessionStorage.setItem("fadu-upd-reload", String(Date.now())); } catch (e) {}
+      location.reload();
+      return;
+    }
+    updateSw();
+    checkNewVersion();
+  });
+}
 </script>
 </body>
 </html>
