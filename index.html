@@ -42,6 +42,7 @@
   .pg{animation:pulseG 1.3s ease-in-out infinite;} .pr{animation:pulseR 1.3s ease-in-out infinite;}
   .pgf{animation:pulseG .7s ease-in-out infinite;} .prf{animation:pulseR .7s ease-in-out infinite;}
   .tabs{position:fixed;bottom:0;left:0;right:0;display:flex;justify-content:center;}
+  #ver-badge{position:fixed;right:8px;bottom:4px;z-index:49;font-size:10px;color:var(--ink-soft);opacity:.8;background:rgba(247,244,236,.88);padding:1px 6px;border-radius:6px;pointer-events:none;}
   .tabs-inner{max-width:480px;width:100%;background:#fff;border-top:1px solid #D8CFB8;display:flex;justify-content:space-around;padding:8px 4px;}
   .tab-btn{display:flex;flex-direction:column;align-items:center;gap:2px;font-size:10px;color:var(--ink-soft);position:relative;padding:2px 8px;}
   .tab-btn.active{color:var(--ink);font-weight:600;}
@@ -142,6 +143,7 @@
 <div id="save-dim" class="hidden"></div>
 <div id="save-banner" class="hidden" role="status"></div>
 <div id="detail-root"></div>
+<div id="ver-badge" class="mono"></div>
 
 <div class="tabs hidden" id="tabs-nav">
   <div class="tabs-inner">
@@ -186,7 +188,7 @@ const ZONES = [
 ];
 const DELAY_MS = 15 * 60 * 1000;
 
-const APP_VERSION = "1.17.9";
+const APP_VERSION = "1.17.11";
 const VERSION_HISTORY = [
   { version: "1.6.0", changes: [
     "Arreglado un error que dejaba de guardar cambios después de contradecir una solicitud (afectaba solo a esas aulas puntuales).",
@@ -308,8 +310,10 @@ const VERSION_HISTORY = [
   { version: "1.17.8", changes: [
     "Nuevo: aulas \"con entrega\" (maquetas, proyectos, etc.). Las marcan solo los jefes, indicando desde qué día hasta qué día y qué cátedra tiene la entrega (que puede no ser la habitual del aula). Se ven resaltadas en violeta con 📦 y la fecha en que se liberan, porque deben estar siempre cerradas salvo que el docente firme el libro de apertura en la guardia. Aparecen listadas en Inicio; si una está abierta se destaca en rojo, y si ya pasó la fecha se avisa para confirmar la liberación.",
   ]},
-  { version: "1.17.9", changes: [
-    "Corregido: cuando fallaba internet, la app podía abrirse en una versión vieja (sin los cambios nuevos, como las aulas con entrega). Ahora siempre guarda la última versión y se actualiza sola apenas hay conexión. Si hay una versión nueva con la app abierta, aparece un aviso abajo para actualizar.",
+  { version: "1.17.11", changes: [
+    "Corregido: cuando fallaba internet, la app podía abrirse en una versión vieja (sin los cambios nuevos, como las aulas con entrega). Ahora siempre guarda la última versión y se actualiza sola apenas hay conexión.",
+    "Nuevo: si hay una versión más nueva con la app abierta, aparece un aviso abajo para actualizar.",
+    "Nuevo: el número de versión se ve siempre abajo a la derecha de la pantalla.",
   ]},
 ];
 // se mantiene por compatibilidad con el resto del código, siempre apunta a la version mas nueva
@@ -1557,7 +1561,7 @@ function renderInicio(allDoors, pendingList) {
       <button data-filter="demoradas" class="card" style="text-align:left;${filterInicio==='demoradas'?'background:var(--brass-soft);border-color:var(--brass);':''}"><p style="font-size:22px;font-weight:700;color:var(--red);margin:0;">${delayedCount}</p><p style="font-size:11px;color:var(--ink-soft);margin:2px 0 0;">Demoradas</p></button>
       <button data-filter="anomalias" class="card" style="text-align:left;${filterInicio==='anomalias'?'background:var(--brass-soft);border-color:var(--brass);':''}"><p style="font-size:22px;font-weight:700;color:var(--red);margin:0;">${doorsWithAnomalies.length}</p><p style="font-size:11px;color:var(--ink-soft);margin:2px 0 0;">Anomalías</p></button>
     </div>`;
-  if (user.role==="jefe" && staffTurnos(data.staff[user.name]).includes("noche") || isSuperuser(user)) {
+  if (user.role==="jefe" || isSuperuser(user)) {
     const openNow = Object.values(data.doors).filter(d => d.status === "open").length;
     html += `<button id="close-all-btn" class="card" style="display:flex;gap:10px;align-items:center;width:100%;margin-bottom:12px;text-align:left;background:var(--red-soft);border-color:var(--red);"><span style="font-size:20px;">🌙</span><div><p style="font-size:13px;font-weight:700;margin:0;color:var(--red);">Cerrar todas las aulas abiertas (${openNow})</p><p style="font-size:11px;color:var(--ink-soft);margin:2px 0 0;">Cierre general de fin de turno — queda registrado en el historial.</p></div></button>`;
   }
@@ -2328,6 +2332,20 @@ function renderDoorDetail() {
   root.querySelectorAll("[data-resolve]").forEach(b => b.onclick = () => resolveAnomaly(d.id, b.dataset.resolve));
 }
 
+// ---- cartel con el número de versión (siempre visible, arriba de la barra de pestañas) ----
+(function () {
+  const b = document.getElementById("ver-badge"); if (!b) return;
+  b.textContent = "v" + APP_VERSION;
+  const tabs = document.getElementById("tabs-nav");
+  const place = () => {
+    const h = tabs && !tabs.classList.contains("hidden") ? tabs.offsetHeight : 0;
+    b.style.bottom = h ? (h + 4) + "px" : "calc(4px + env(safe-area-inset-bottom, 0px))";
+  };
+  place();
+  window.addEventListener("resize", place);
+  if (window.ResizeObserver && tabs) new ResizeObserver(place).observe(tabs);
+})();
+
 // ---- actualización automática ----
 // el service worker guarda siempre la última versión buena, y acá se compara contra la del servidor:
 // si hay una más nueva se avisa abajo, y se recarga sola al volver a la app (si no hay nada sin guardar).
@@ -2346,13 +2364,23 @@ function showUpdateBanner(v) {
   };
   document.body.appendChild(b);
 }
+// true solo si a es MÁS NUEVA que b (compara número por número: 1.17.10 > 1.17.9)
+function isNewerVersion(a, b) {
+  const x = String(a).split(".").map(Number), y = String(b).split(".").map(Number);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] || 0) - (y[i] || 0);
+    if (d) return d > 0;
+  }
+  return false;
+}
 async function checkNewVersion() {
   try {
     if (navigator.onLine === false) return;
-    const r = await fetch("index.html", { cache: "no-store" });
+    // el ?v= evita que un caché intermedio (red del celular, CDN) devuelva una copia vieja
+    const r = await fetch("index.html?v=" + Date.now(), { cache: "no-store" });
     if (!r.ok) return;
-    const m = (await r.text()).match(/const APP_VERSION = "([^"]+)"/);
-    if (m && m[1] !== APP_VERSION) showUpdateBanner(m[1]);
+    const m = (await r.text()).match(/const APP_VERSION = "(\d+(?:\.\d+)*)"/);
+    if (m && isNewerVersion(m[1], APP_VERSION)) showUpdateBanner(m[1]);
   } catch (e) {}
 }
 function updateSw() { try { if (swReg) swReg.update().catch(() => {}); } catch (e) {} }

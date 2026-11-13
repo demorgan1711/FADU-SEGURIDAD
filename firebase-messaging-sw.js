@@ -97,12 +97,13 @@ self.addEventListener("fetch", (e) => {
   if (req.method !== "GET") return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return; // Firebase, Google Fonts, etc.: los maneja el navegador
-  const isPage = req.mode === "navigate" || url.href === SCOPE || url.href === INDEX_URL;
-  e.respondWith(networkFirst(e, isPage ? INDEX_URL : req, isPage ? INDEX_URL : req.url, isPage));
+  const isPage = req.mode === "navigate" || url.href === SCOPE || url.origin + url.pathname === INDEX_URL;
+  // la página se pide con un ?v=hora para saltear cachés intermedios (CDN, red del celular) que a veces devuelven una copia vieja
+  e.respondWith(networkFirst(e, isPage ? INDEX_URL + "?v=" + Date.now() : req, isPage ? INDEX_URL : req.url, isPage));
 });
 
 function networkFirst(e, toFetch, key, isPage) {
-  const fresh = fetch(toFetch, { cache: "no-cache" }).then((res) => {
+  const fresh = fetch(toFetch, { cache: isPage ? "no-store" : "no-cache" }).then((res) => {
     if (res && res.ok) {
       const copy = res.clone();
       caches.open(CACHE).then((c) => c.put(key, copy)).catch(() => {});
