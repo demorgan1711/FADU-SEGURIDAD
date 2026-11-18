@@ -191,7 +191,7 @@ const ZONES = [
 ];
 const DELAY_MS = 15 * 60 * 1000;
 
-const APP_VERSION = "1.17.14";
+const APP_VERSION = "1.17.16";
 const VERSION_HISTORY = [
   { version: "1.6.0", changes: [
     "Arreglado un error que dejaba de guardar cambios después de contradecir una solicitud (afectaba solo a esas aulas puntuales).",
@@ -318,8 +318,12 @@ const VERSION_HISTORY = [
     "Nuevo: si hay una versión más nueva con la app abierta, aparece un aviso abajo para actualizar.",
     "Nuevo: el número de versión se ve siempre abajo a la derecha de la pantalla.",
   ]},
-  { version: "1.17.14", changes: [
-    "Mejoras y ajustes menores.",
+  { version: "1.17.16", changes: [
+    "⚖️ NUEVO · JURY: la app ahora sabe qué aulas tienen jury. Los jefes las marcan con los días (todas juntas o de a una) y se ven en azul con JURY hasta dd/mm. Igual que las aulas con entrega, deben estar siempre cerradas.",
+    "🔎 Botón ⚖️ Jury (abajo a la izquierda, en todas las pantallas): buscá por número de tribunal (T24), aula, cátedra o coordinador y mirá al instante dónde está, con su coordinador, las cátedras, la materialización y si el aula está abierta o cerrada.",
+    "📋 Al tocar un aula con jury ves los datos de la planilla: tribunal, coordinador, cátedras y materialización. Los jefes pueden editar las fechas o desasignarla.",
+    "🧹 Los jefes pueden desasignar todas las aulas del jury de una sola vez, o elegir solo algunas con la selección múltiple.",
+    "🗑️ Personal: quienes tienen el permiso para gestionar cátedras ahora pueden borrar todas las cátedras de una vez, para cuando termina el año.",
   ]},
 ];
 // se mantiene por compatibilidad con el resto del código, siempre apunta a la version mas nueva
@@ -1068,6 +1072,20 @@ function openJuryMark(ids, fromSelection) {
   const rm = document.getElementById("jm-remove");
   if (rm) rm.onclick = () => { setJury(list, null); root.innerHTML = ""; render(); };
 }
+function juryDetailHTML(d) {
+  if (!d.jury) return "";
+  const st = entregaState(d.jury), isJ = user && (user.role === "jefe" || isSuperuser(user));
+  const col = st === "vencida" ? "#9A6700" : "#1F5FA8";
+  const ts = JURY.filter(t => juryDoorId(t.aula) === d.id);
+  return `<div class="card" style="margin-bottom:16px;background:#DCEBFA;border:2px solid ${col};">
+    <p style="font-size:13px;font-weight:800;color:${col};margin:0 0 2px;">⚖️ ${st === "proxima" ? "JURY (todavía no empezó)" : st === "vencida" ? "JURY — ya terminó" : "AULA CON JURY"}</p>
+    <p style="font-size:13px;margin:4px 0 8px;">📅 ${esc(entregaRango(d.jury))}</p>
+    ${ts.length ? ts.map(t => `<div style="border-top:1px solid #B9D3EE;padding:6px 0;"><p style="margin:0;font-size:13px;font-weight:800;">T ${t.n} · coordina ${esc(t.coord)}</p><p style="margin:2px 0 0;font-size:12px;">Cátedras: ${esc(t.cats.join(" · "))}</p>${t.mat ? `<p style="margin:2px 0 0;font-size:12px;color:var(--ink-soft);">Materialización: ${esc(t.mat)}</p>` : ""}</div>`).join("") : `<p style="font-size:12px;margin:0;">Sin tribunales cargados en esta aula.</p>`}
+    ${st === "vencida" ? `<p style="font-size:12px;margin:8px 0 0;color:${col};font-weight:600;">Ya pasó la fecha del jury. Un jefe tiene que quitarlo para liberar el aula.</p>` : `<p style="font-size:12px;margin:8px 0 0;">Debe permanecer <b>siempre cerrada</b> durante el jury.</p>`}
+    ${d.jury.by ? `<p style="font-size:10px;color:var(--ink-soft);margin:6px 0 0;">Cargada por ${esc(d.jury.by)}${d.jury.since ? " · " + elapsed(d.jury.since) : ""}</p>` : ""}
+    ${isJ ? `<div style="display:flex;gap:8px;margin-top:10px;"><button id="det-jury-edit" style="flex:1;padding:8px;border-radius:6px;border:1px solid #1F5FA8;color:#1F5FA8;font-size:12px;font-weight:700;background:#fff;">Editar fechas</button><button id="det-jury-rm" style="flex:1;padding:8px;border-radius:6px;border:1px solid var(--red);color:var(--red);font-size:12px;font-weight:700;background:#fff;">Desasignar del jury</button></div>` : ""}
+  </div>`;
+}
 function openJurySheet() {
   const root = document.getElementById("detail-root");
   const isJefe = user && (user.role === "jefe" || isSuperuser(user));
@@ -1075,7 +1093,7 @@ function openJurySheet() {
   root.innerHTML = `<div class="sheet" id="jury-bg"><div class="sheet-inner">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;"><h2 class="display" style="font-size:20px;font-weight:700;margin:0;color:#1F5FA8;">⚖️ Jury</h2><button id="jury-close" style="font-size:20px;">✕</button></div>
     <p class="mono" style="font-size:11px;color:var(--ink-soft);margin:0 0 10px;">Planilla del ${JURY_SEMANA} · ${JURY.length} tribunales</p>
-    ${isJefe ? `<div style="display:flex;gap:8px;margin-bottom:10px;"><button id="jury-mark-all" style="flex:1;padding:8px;border-radius:6px;border:1px solid #1F5FA8;color:#1F5FA8;font-size:12px;font-weight:700;background:#fff;">⚖️ Marcar todas las aulas</button><button id="jury-off-all" style="flex:1;padding:8px;border-radius:6px;border:1px solid #D8CFB8;color:var(--ink-soft);font-size:12px;font-weight:600;background:#fff;">Quitar jury</button></div>` : ""}
+    ${isJefe ? `<div style="display:flex;gap:8px;margin-bottom:10px;"><button id="jury-mark-all" style="flex:1;padding:8px;border-radius:6px;border:1px solid #1F5FA8;color:#1F5FA8;font-size:12px;font-weight:700;background:#fff;">⚖️ Marcar todas las aulas</button><button id="jury-off-all" style="flex:1;padding:8px;border-radius:6px;border:1px solid #D8CFB8;color:var(--ink-soft);font-size:12px;font-weight:600;background:#fff;">Desasignar todas</button></div>` : ""}
     <input id="jury-q" placeholder="Buscar: nº de tribunal, aula, cátedra o coordinador" autocomplete="off" style="width:100%;border:1px solid #D8CFB8;border-radius:8px;padding:11px 12px;font-size:14px;" />
     <div id="jury-list" style="margin-top:10px;"></div></div></div>`;
   const q = document.getElementById("jury-q"), box = document.getElementById("jury-list");
@@ -1109,7 +1127,7 @@ function openJurySheet() {
   document.getElementById("jury-bg").onclick = (e) => { if (e.target.id === "jury-bg") close(); };
   const mk = document.getElementById("jury-mark-all"), off = document.getElementById("jury-off-all");
   if (mk) mk.onclick = () => openJuryMark(allIds, false);
-  if (off) off.onclick = () => { if (confirm("¿Quitar el jury de todas las aulas?")) { setJury(Object.keys(data.doors).filter(k => data.doors[k].jury), null); close(); render(); } };
+  if (off) off.onclick = () => { if (confirm("¿Desasignar TODAS las aulas del jury? Quedan liberadas.")) { setJury(Object.keys(data.doors).filter(k => data.doors[k].jury), null); close(); render(); } };
 }
 
 // Aulas "con entrega" (maquetas, proyectos, etc.): deben estar siempre cerradas. Solo los jefes las marcan.
@@ -1865,7 +1883,8 @@ function renderPersonal() {
         const aulas = catedraAulas(c);
         const searchTxt = esc(`${catedraLabel(c)} ${aulas.map(a=>aulaLabel(a)).join(" ")}`.toLowerCase());
         return `<span class="chip catedra-chip" data-search="${searchTxt}" style="opacity:.7;">${esc(catedraLabel(c))}</span>`;
-      }).join("")}</div>`}`;
+      }).join("")}</div>
+      <button id="del-all-catedras" style="width:100%;margin-top:16px;padding:10px;border-radius:8px;border:1px solid var(--red);color:var(--red);font-size:12px;font-weight:700;background:#fff;">🗑️ Borrar todas las cátedras (fin de año)</button>`}`;
 
   const permisosBlock = isSuperuser(user) ? `
     <div style="margin-top:32px;">
@@ -1959,6 +1978,15 @@ function bindTabHandlers(root) {
       root.querySelectorAll(".catedra-chip").forEach(chip => {
         chip.style.display = (!q || (chip.dataset.search||"").includes(q)) ? "" : "none";
       });
+    };
+    const delAll = document.getElementById("del-all-catedras");
+    if (delAll) delAll.onclick = () => {
+      const n = (data.catedras || []).length;
+      if (!confirm(`¿Borrar las ${n} cátedras cargadas? Se borran para todos y no se puede deshacer. Usalo solo al terminar el año.`)) return;
+      const t = prompt("Para confirmar, escribí BORRAR");
+      if (t === null || t.trim().toUpperCase() !== "BORRAR") return;
+      update(prev => ({ ...prev, catedras: [] }));
+      render();
     };
     const ci = document.getElementById("new-catedra-input"), cb = document.getElementById("new-catedra-btn");
     const cMateria = document.getElementById("new-catedra-materia");
@@ -2304,7 +2332,7 @@ let selectedCatedra = null, selectedCatedraId = null, markCleanChecked = false, 
 // si cualquiera de estas está abierta, renderDoorDetail no tiene que pisarla — sino, cualquier
 // actualización de datos en tiempo real (de cualquier usuario, en cualquier parte de la app)
 // las cerraba solas antes de que se llegaran a leer.
-const OTHER_MODAL_IDS = ["all-notes-bg", "version-popup-bg", "full-changelog-bg", "staff-sheet-bg", "cat-sheet-bg", "note-sheet-bg", "entrega-sheet-bg"];
+const OTHER_MODAL_IDS = ["all-notes-bg", "version-popup-bg", "full-changelog-bg", "staff-sheet-bg", "cat-sheet-bg", "note-sheet-bg", "entrega-sheet-bg", "jury-bg", "jm-bg"];
 function renderDoorDetail() {
   const root = document.getElementById("detail-root");
   if (OTHER_MODAL_IDS.some(id => document.getElementById(id))) return;
@@ -2327,7 +2355,7 @@ function renderDoorDetail() {
     <p style="margin:0 0 4px;font-weight:600;">Estado actual: ${d.status==="open"?"Abierta 🟢":"Cerrada 🔴"}</p>
     <p style="font-size:13px;color:var(--ink-soft);margin:0 0 16px;">🔑 ${(d.keyHolders&&d.keyHolders.length)?`Llave en poder de ${d.keyHolders.map(esc).join(", ")}`:"Sin nadie asignado a la llave"} · ${esc(d.sectorLabel)}</p>
     ${(() => {
-      const catedrasDeEstaAula = catedrasForToday(d.id);
+      const catedrasDeEstaAula = d.jury ? [] : catedrasForToday(d.id);
       if (!catedrasDeEstaAula.length) return "";
       return `<div class="card" style="margin-bottom:16px;background:var(--brass-soft);">
         <p class="mono" style="font-size:10px;color:var(--ink-soft);margin:0 0 6px;">CÁTEDRAS QUE USAN ESTA AULA${(user.role==="jefe"||isSuperuser(user))?" (tocá para elegirla al pedir)":""}</p>
@@ -2355,6 +2383,7 @@ function renderDoorDetail() {
         ${entregaRango(e) ? `<p style="font-size:13px;margin:4px 0 0;">📅 Con entrega ${esc(entregaRango(e))}${st==="activa" && e.hasta ? ` · <b>se libera después del ${fmtDM(e.hasta)}</b>` : ""}</p>` : ""}
         ${st==="vencida" ? `<p style="font-size:12px;margin:6px 0 0;color:${col};font-weight:600;">Ya pasó la fecha de entrega. Un jefe tiene que confirmar la liberación del aula.</p>` : `<p style="font-size:12px;margin:6px 0 0;">Debe permanecer <b>siempre cerrada</b>. Solo se abre si el docente firma el libro de apertura en la guardia y lo solicita.</p>`}
         ${e.by ? `<p style="font-size:10px;color:var(--ink-soft);margin:6px 0 0;">Cargada por ${esc(e.by)}${e.since ? " · " + elapsed(e.since) : ""}</p>` : ""}</div>`; })() : ""}
+    ${juryDetailHTML(d)}
     ${(user.role==="jefe"||isSuperuser(user)) ? `<button id="det-entrega-btn" style="width:100%;padding:10px;border-radius:6px;border:1px solid #6B3FA0;color:#6B3FA0;font-size:12px;font-weight:700;margin-bottom:16px;background:#fff;">${d.entrega ? "📦 Editar o quitar la entrega" : "📦 Marcar aula CON ENTREGA"}</button>` : ""}
     ${d.tvKeyOnly ? `<div class="card" style="margin-bottom:16px;background:#F1ECDD;border-color:var(--red);"><p style="font-size:12px;margin:0;color:var(--red);font-weight:600;">📺 No tiene TV, pero su llave está en el manojo de las aulas con TV.</p></div>` : ""}
     ${d.hasTV ? `<div class="card" style="margin-bottom:16px;background:#F1ECDD;"><p style="font-size:12px;margin:0;">📺 Tiene TV — extremar el cuidado al cerrar.</p></div>` : ""}
@@ -2370,7 +2399,7 @@ function renderDoorDetail() {
         <button id="det-req-open" ${pr?.type==="open"?"disabled":""} style="flex:1;padding:10px;border-radius:6px;background:var(--green-soft);font-size:13px;font-weight:600;opacity:${pr?.type==="open"?0.5:1};">🚪 Pedir apertura</button>
         <button id="det-req-closed" ${pr?.type==="closed"?"disabled":""} style="flex:1;padding:10px;border-radius:6px;background:var(--red-soft);font-size:13px;font-weight:600;opacity:${pr?.type==="closed"?0.5:1};">🚪 Pedir cierre</button>
       </div>
-      <details id="det-cat-details" style="margin-bottom:16px;" ${catedraDetailsOpen?"open":""}>
+      ${d.jury ? "" : `<details id="det-cat-details" style="margin-bottom:16px;" ${catedraDetailsOpen?"open":""}>
         <summary style="font-size:11px;color:var(--ink-soft);cursor:pointer;">¿De qué cátedra es? (opcional, tocá para elegir)</summary>
         <div style="margin-top:10px;">
           ${catedras.length ? `<div id="det-catedras" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">${catedras.map(c=>{ const aulas = catedraAulas(c); return `<button class="chip det-cat${selectedCatedraId===catedraId(c)?" active":""}" data-cat-id="${esc(catedraId(c))}" data-cat="${esc(catedraLabel(c))}">${esc(catedraLabel(c))}${aulas.length?` (${aulas.map(a=>esc(aulaLabel(a))).join(", ")})`:""}</button>`; }).join("")}</div>` : ""}
@@ -2384,7 +2413,7 @@ function renderDoorDetail() {
           </div>
           ${!hasPermission(user,"gestionCatedras") ? `<p style="font-size:10px;color:var(--ink-soft);margin:2px 0 0;">Esta cátedra queda guardada solo en este pedido, no se suma al catálogo general.</p>` : ""}
         </div>
-      </details>` : ""}
+      </details>`}` : ""}
     <p class="mono" style="font-size:11px;color:var(--ink-soft);margin-bottom:6px;">YA LO HICE CON LA LLAVE — MARCAR</p>
     <p style="font-size:11px;color:var(--ink-soft);margin-bottom:8px;">Usalo también si te lo pidieron por handy, sin pasar por una solicitud del sistema.</p>
     ${(user.role==="jefe"||isSuperuser(user)) ? `
@@ -2421,6 +2450,9 @@ function renderDoorDetail() {
   const detKhWidget = document.getElementById("det-keyholders") ? bindKeyHolderPicker("det-keyholders", d.sector, []) : null;
   const entBtn = document.getElementById("det-entrega-btn");
   if (entBtn) entBtn.onclick = () => openEntregaSheet([d.id], false);
+  const jEd = document.getElementById("det-jury-edit"), jRm = document.getElementById("det-jury-rm");
+  if (jEd) jEd.onclick = () => openJuryMark([d.id], false);
+  if (jRm) jRm.onclick = () => { if (confirm(`¿Desasignar ${d.label} del jury? El aula queda liberada.`)) { setJury([d.id], null); render(); } };
   const markOpenBtn = document.getElementById("det-mark-open"), markClosedBtn = document.getElementById("det-mark-closed");
   if (markOpenBtn) markOpenBtn.onclick = () => {
     if (!confirmEntregaOpen([d])) return;
