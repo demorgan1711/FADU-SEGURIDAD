@@ -32,6 +32,7 @@
   .header{background:var(--ink);color:#F7F4EC;padding:20px 16px 12px;border-radius:0 0 14px 14px;display:flex;justify-content:space-between;align-items:center;}
   .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;}
   .grid2{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;}
+  .plate.jury{background:#DCEBFA;border:2px solid #1F5FA8;}
   .plate.entrega{background:#EDE3F8;border:2px solid #6B3FA0;}
   .plate.entrega-vencida{background:#FFF4D6;border:2px solid #C98A00;}
   .plate.entrega-open{background:#FBE4E1;border:2px solid var(--red);}
@@ -42,6 +43,7 @@
   .pg{animation:pulseG 1.3s ease-in-out infinite;} .pr{animation:pulseR 1.3s ease-in-out infinite;}
   .pgf{animation:pulseG .7s ease-in-out infinite;} .prf{animation:pulseR .7s ease-in-out infinite;}
   .tabs{position:fixed;bottom:0;left:0;right:0;display:flex;justify-content:center;}
+  #jury-fab{position:fixed;left:8px;bottom:4px;z-index:49;display:none;font-size:12px;font-weight:700;color:#1F5FA8;background:#DCEBFA;border:1px solid #1F5FA8;border-radius:16px;padding:6px 12px;box-shadow:0 1px 6px rgba(0,0,0,.2);}
   #ver-badge{position:fixed;right:8px;bottom:4px;z-index:49;font-size:10px;color:var(--ink-soft);opacity:.8;background:rgba(247,244,236,.88);padding:1px 6px;border-radius:6px;pointer-events:none;}
   .tabs-inner{max-width:480px;width:100%;background:#fff;border-top:1px solid #D8CFB8;display:flex;justify-content:space-around;padding:8px 4px;}
   .tab-btn{display:flex;flex-direction:column;align-items:center;gap:2px;font-size:10px;color:var(--ink-soft);position:relative;padding:2px 8px;}
@@ -144,6 +146,7 @@
 <div id="save-banner" class="hidden" role="status"></div>
 <div id="detail-root"></div>
 <div id="ver-badge" class="mono"></div>
+<button id="jury-fab">⚖️ Jury</button>
 
 <div class="tabs hidden" id="tabs-nav">
   <div class="tabs-inner">
@@ -188,7 +191,7 @@ const ZONES = [
 ];
 const DELAY_MS = 15 * 60 * 1000;
 
-const APP_VERSION = "1.17.11";
+const APP_VERSION = "1.17.14";
 const VERSION_HISTORY = [
   { version: "1.6.0", changes: [
     "Arreglado un error que dejaba de guardar cambios después de contradecir una solicitud (afectaba solo a esas aulas puntuales).",
@@ -314,6 +317,9 @@ const VERSION_HISTORY = [
     "Corregido: cuando fallaba internet, la app podía abrirse en una versión vieja (sin los cambios nuevos, como las aulas con entrega). Ahora siempre guarda la última versión y se actualiza sola apenas hay conexión.",
     "Nuevo: si hay una versión más nueva con la app abierta, aparece un aviso abajo para actualizar.",
     "Nuevo: el número de versión se ve siempre abajo a la derecha de la pantalla.",
+  ]},
+  { version: "1.17.14", changes: [
+    "Mejoras y ajustes menores.",
   ]},
 ];
 // se mantiene por compatibilidad con el resto del código, siempre apunta a la version mas nueva
@@ -620,7 +626,8 @@ function reconcileDoors(storedDoors) {
       pendingRequest: pr,
       clean: s ? !!s.clean : c.clean,
       anomalies: s && s.anomalies ? s.anomalies : c.anomalies,
-      entrega: s && s.entrega ? s.entrega : null, // aula 'con entrega' (la marcan solo los jefes)
+      entrega: s && s.entrega ? s.entrega : null,
+      jury: s && s.jury ? s.jury : null, // aula 'con entrega' (la marcan solo los jefes)
     };
   });
   return result;
@@ -964,6 +971,147 @@ function autoPlaceInSector(staff, sector) {
   user.zones = [sector];
   return { ...staff, [user.name]: { ...me, zones: [sector] } };
 }
+// ---- Jury: tribunales de examen. La planilla se carga acá; las aulas se marcan igual que las "con entrega" (otro color) ----
+const JURY_SEMANA = "17/11";
+const JURY_RAW = `1|118|GOMEZ DIZ|TABA;MALDONADO;GOMEZ DIZ|EX PETRILLI NOCHE
+2|118|RED FERRARI|TABA;PULOPULO;RED FERRARI|EX PETRILLI NOCHE
+3|118|TABA|TABA;PULOPULO;TALLER NACION|EX PETRILLI NOCHE
+4|118|AVB|TABA;TALLER NACION;TALLER AVB|EX PETRILLI MAÑANA
+5|E101|MAESTRIPIERI|TABA;MAESTRIPIERI;MIRANDA|EX ROMEO
+6|E101|TABA|TABA;EXPLORA MAÑANA;SOLER|EX PETRILLI NOCHE
+7|E102|SOLER|TABA;SOLER;PULOPULO|EX PETRILLI NOCHE
+8|E102|EXPLORA MAÑANA|EXPLORA MAÑANA;TALLER NACION;TABA|EX MARCHETTI
+9|E103|RIO DE LA PLATA|RIO DE LA PLATA;TALLER NACION;TABA|EX MARCHETTI
+10|E103|DIEGUEZ|DIEGUEZ;TALLER NACION;RIO DE LA PLATA|
+11|E109|AMETTE|AMETTE;SOLER;TABA|EX MIGLIOLI
+12|E109|DIEGUEZ|AMETTE;SOLER;DIEGUEZ|EX PETRILLI MAÑANA
+13|E111|TTD|A+A;TTD;SUDAMERICA|EX AZNAR
+14|E111|A+A|A+A;TTD;PLAN B|EX AZNAR
+15|E111|A77|DIEGUEZ;A77;PLAN B|EX ROMEO
+16|E112D|ROCA SARDIN|LEDESMA;ROCA SARDIN;DIEGUEZ|EX MIGLIOLI
+17|E112C|PULOPULO|AMETTE;DIEGUEZ;PULOPULO|EX MIGLIOLI
+18|E112B|AMETTE|AMETTE;G. MONTANER;A+A|EX ROMEO
+19|E112A|TALLER NACION|G. MONTANER;A77;TALLER NACION|EX ROMEO
+20|E113|LEDESMA|EXPLORA MAÑANA;LEDESMA;AMETTE|EX AZNAR
+21|E113|PULOPULO|A77;ROCA SARDIN;PULOPULO|EX PETRILLI MAÑANA
+22|E113|G. MONTANER|ROCA SARDIN;G. MONTANER;A+A|EX AZNAR
+23|E118|FORMA Y PROYECTO|TALLER FORMA Y PROYECTO;G. MONTANER;PULOPULO|EX ROMEO
+24|E118|EXPLORA NOCHE|EXPLORA NOCHE;LESTARD CAJIDE JANCHES;PULOPULO|EX PETRILLI MAÑANA
+25|E119|DIEGUEZ|TALLER NACION;DIEGUEZ;PULOPULO|EX PETRILLI MAÑANA
+26|E119|A+A|TABA;A+A;AMETTE|EX PETRILLI NOCHE
+27|E121|AMETTE|LESTARD CAJIDE JANCHES;EXPLORA MAÑANA;AMETTE|EX PETRILLI MAÑANA
+28|E121|ROCA SARDIN|TABA;ROCA SARDIN;DIEGUEZ|EX MIGLIOLI
+29|E123|TABA|GOMEZ DIZ;TABA;JAIMES|EX MARCHETTI
+30|E123|SOLER|LEDESMA;GOMEZ DIZ;SOLER|EX ROMEO
+31|E123|LEDESMA|TABA;LEDESMA;G. MONTANER|EX AZNAR
+32|E124A|MOSCATO|DIEGUEZ;MOSCATO;A+A|EX MARCHETTI
+33|E124B|TALLER NACION|ROCA SARDIN;TABA;TALLER NACION|EX PETRILLI NOCHE
+34|E124C|LESTARD CAJIDE JANCHES|LESTARD CAJIDE JANCHES;A+A;AMETTE|EX PETRILLI MAÑANA
+35|E124D|SUDAMERICA|SUDAMERICA;TALLER NACION;TABA|EX ROMEO
+36|206|A+A|A+A;LEDESMA;DIEGUEZ|EX AZNAR
+37|206|A+A|A+A;TABA;DIEGUEZ|EX PETRILLI MAÑANA
+38|206|TALLER NACION|EXPLORA NOCHE;LEDESMA;TALLER NACION|
+39|206|EXPLORA NOCHE|EXPLORA NOCHE;ROCA SARDIN;TALLER NACION|EX MIGLIOLI
+40|226|TALLER NACION|ROCA SARDIN;TABA;TALLER NACION|EX PETRILLI NOCHE
+41|228|AMETTE|AMETTE;EXPLORA NOCHE;A+A|EX MIGLIOLI
+42|302|SOLER|DIEGUEZ;SOLER;A+A|EX AZNAR
+43|302|MALDONADO|DIEGUEZ;MALDONADO;A+A|EX AZNAR
+44|303|DIEGUEZ|DIEGUEZ;EXPLORA NOCHE;A+A|EX ROMEO
+45|303|G. MONTANER|ROCA SARDIN;PULOPULO;G. MONTANER|EX MIGLIOLI
+46|304|PLAN B|ROCA SARDIN;LESTARD CAJIDE JANCHES;PLAN B|EX PETRILLI MAÑANA
+47|304|LESTARD CAJIDE JANCHES|ROCA SARDIN;LESTARD CAJIDE JANCHES;MOSCATO|EX MARCHETTI
+48|305|TABA|G. MONTANER;DIEGUEZ;TABA|
+49|305|ROCA SARDIN|PLAN B;ROCA SARDIN;MOSCATO|EX MARCHETTI
+50|325|PULOPULO|PULOPULO;A77;PRADELLI|EX ROMEO
+51|326|LEDESMA|ROCA SARDIN;LEDESMA;TTD|EX AZNAR
+52|328|TABA|ROCA SARDIN;AMETTE;TABA|EX PETRILLI NOCHE
+53|329|ROCA SARDIN|ROCA SARDIN;AMETTE;PRADELLI|EX MIGLIOLI
+54|330|G. MONTANER|G. MONTANER;TTD;SOLER|`;
+const JURY = JURY_RAW.split("\n").map(l => { const p = l.split("|"); return { n: +p[0], aula: p[1], coord: p[2], cats: p[3].split(";"), mat: p[4] || "" }; });
+function sq(x) { return normS(x).replace(/[^a-z0-9]/g, ""); }
+function normS(x) { return String(x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase(); }
+// "118" -> aula 118; "E101" -> EP101; las 3xx no existen en la app (devuelve null)
+function juryDoorId(aula) { const m = /^E(\d+[A-D]?)$/i.exec(aula); const id = m ? "EP" + m[1].toUpperCase() : aula; return data.doors[id] ? id : null; }
+function setJury(ids, val) {
+  if (!(user && (user.role === "jefe" || isSuperuser(user)))) return;
+  const list = [...ids], v = val ? { ...val } : null;
+  update(prev => { const doors = { ...prev.doors }; list.forEach(id => { if (doors[id]) doors[id] = { ...doors[id], jury: v }; }); return { ...prev, doors }; });
+}
+function openJuryMark(ids, fromSelection) {
+  if (!(user && (user.role === "jefe" || isSuperuser(user)))) return;
+  const list = [...ids], root = document.getElementById("detail-root");
+  const labels = list.map(id => data.doors[id] && data.doors[id].label).filter(Boolean).join(", ");
+  const ex = list.length === 1 && data.doors[list[0]] ? data.doors[list[0]].jury : null;
+  const inp = "width:100%;border:1px solid #D8CFB8;border-radius:8px;padding:10px;font-size:14px;margin-top:6px;";
+  root.innerHTML = `<div class="sheet" id="jm-bg"><div class="sheet-inner">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;"><h2 class="display" style="font-size:20px;font-weight:700;margin:0;color:#1F5FA8;">⚖️ Aulas con jury</h2><button id="jm-close" style="font-size:20px;">✕</button></div>
+    <p style="font-size:12px;color:var(--ink-soft);margin:0 0 14px;">${esc(labels)}</p>
+    <div style="display:flex;gap:10px;margin-bottom:6px;">
+      <div style="flex:1;"><label class="mono" style="font-size:11px;color:var(--ink-soft);">DESDE</label><input id="jm-desde" type="date" value="${ex && ex.desde ? ex.desde : localDateStr()}" style="${inp}" /></div>
+      <div style="flex:1;"><label class="mono" style="font-size:11px;color:var(--ink-soft);">HASTA (último día)</label><input id="jm-hasta" type="date" value="${ex && ex.hasta ? ex.hasta : ""}" style="${inp}" /></div>
+    </div>
+    <p id="jm-err" class="hidden" style="color:var(--red);font-size:12px;margin:4px 0;">Elegí el último día (no puede ser anterior al primero).</p>
+    <p style="font-size:11px;color:var(--ink-soft);margin:8px 0 14px;">Mientras dure, estas aulas deben estar siempre cerradas, igual que las "con entrega".</p>
+    <button id="jm-save" class="btn-primary" style="background:#1F5FA8;">Guardar</button>
+    ${ex ? `<button id="jm-remove" style="width:100%;margin-top:10px;padding:12px;border-radius:8px;color:var(--red);font-weight:600;font-size:13px;border:1px solid var(--red-soft);">Quitar jury</button>` : ""}
+  </div></div>`;
+  const close = () => { root.innerHTML = ""; };
+  document.getElementById("jm-close").onclick = close;
+  document.getElementById("jm-bg").onclick = (e) => { if (e.target.id === "jm-bg") close(); };
+  document.getElementById("jm-save").onclick = () => {
+    const desde = document.getElementById("jm-desde").value || localDateStr(), hasta = document.getElementById("jm-hasta").value;
+    if (!hasta || hasta < desde) { document.getElementById("jm-err").classList.remove("hidden"); return; }
+    setJury(list, { since: (ex && ex.since) || now(), by: user.name, desde, hasta });
+    root.innerHTML = "";
+    if (fromSelection) clearSelection(); else render();
+  };
+  const rm = document.getElementById("jm-remove");
+  if (rm) rm.onclick = () => { setJury(list, null); root.innerHTML = ""; render(); };
+}
+function openJurySheet() {
+  const root = document.getElementById("detail-root");
+  const isJefe = user && (user.role === "jefe" || isSuperuser(user));
+  const allIds = [...new Set(JURY.map(t => juryDoorId(t.aula)).filter(Boolean))];
+  root.innerHTML = `<div class="sheet" id="jury-bg"><div class="sheet-inner">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;"><h2 class="display" style="font-size:20px;font-weight:700;margin:0;color:#1F5FA8;">⚖️ Jury</h2><button id="jury-close" style="font-size:20px;">✕</button></div>
+    <p class="mono" style="font-size:11px;color:var(--ink-soft);margin:0 0 10px;">Planilla del ${JURY_SEMANA} · ${JURY.length} tribunales</p>
+    ${isJefe ? `<div style="display:flex;gap:8px;margin-bottom:10px;"><button id="jury-mark-all" style="flex:1;padding:8px;border-radius:6px;border:1px solid #1F5FA8;color:#1F5FA8;font-size:12px;font-weight:700;background:#fff;">⚖️ Marcar todas las aulas</button><button id="jury-off-all" style="flex:1;padding:8px;border-radius:6px;border:1px solid #D8CFB8;color:var(--ink-soft);font-size:12px;font-weight:600;background:#fff;">Quitar jury</button></div>` : ""}
+    <input id="jury-q" placeholder="Buscar: nº de tribunal, aula, cátedra o coordinador" autocomplete="off" style="width:100%;border:1px solid #D8CFB8;border-radius:8px;padding:11px 12px;font-size:14px;" />
+    <div id="jury-list" style="margin-top:10px;"></div></div></div>`;
+  const q = document.getElementById("jury-q"), box = document.getElementById("jury-list");
+  const paint = () => {
+    const t0 = normS(q.value).trim().replace(/^t\s*(?=\d)/, "");
+    let list = JURY;
+    if (t0) {
+      list = /^\d+$/.test(t0) ? JURY.filter(t => String(t.n) === t0 || normS(t.aula).includes(t0)) : JURY.filter(t => sq([t.aula, "taller " + t.aula, t.coord, t.cats.join(" "), t.mat].join(" ")).includes(sq(t0)));
+      list = [...list].sort((a, b) => (String(b.n) === t0) - (String(a.n) === t0));
+    }
+    box.innerHTML = list.length ? list.map(t => {
+      const id = juryDoorId(t.aula), d = id ? data.doors[id] : null, js = d ? entregaState(d.jury) : null;
+      return `<div class="card" style="margin-bottom:8px;">
+        <p style="margin:0 0 2px;font-size:15px;font-weight:800;color:#1F5FA8;">T ${t.n} <span style="color:var(--ink);font-weight:700;">· Taller ${esc(t.aula)}</span></p>
+        <p style="margin:0;font-size:12px;"><b>Coordinador:</b> ${esc(t.coord)}</p>
+        <p style="margin:2px 0 0;font-size:12px;"><b>Cátedras:</b> ${esc(t.cats.join(" · "))}</p>
+        ${t.mat ? `<p style="margin:2px 0 0;font-size:12px;color:var(--ink-soft);"><b>Materialización:</b> ${esc(t.mat)}</p>` : ""}
+        <p style="margin:6px 0 0;font-size:12px;">${d ? `${d.status === "open" ? "🔓 abierta" : "🔒 cerrada"}${js ? ` · ⚖️ jury ${esc(entregaRango(d.jury))}` : ""}` : "<span style=\"color:var(--ink-soft);\">Aula no cargada en la app</span>"}</p>
+        ${d ? `<button data-go="${id}" style="margin-top:6px;padding:6px 12px;border-radius:6px;border:1px solid #1F5FA8;color:#1F5FA8;font-size:12px;font-weight:700;background:#fff;">Ver aula ${esc(d.label)}</button>` : ""}
+      </div>`;
+    }).join("") : `<p style="font-size:13px;color:var(--ink-soft);">No se encontró ningún tribunal.</p>`;
+    box.querySelectorAll("[data-go]").forEach(b => b.onclick = () => {
+      root.innerHTML = ""; tab = "sectores";
+      document.querySelectorAll(".tab-btn").forEach(x => x.classList.toggle("active", x.dataset.tab === tab));
+      selectedDoorId = b.dataset.go; render();
+    });
+  };
+  q.oninput = paint; paint(); q.focus();
+  const close = () => { root.innerHTML = ""; };
+  document.getElementById("jury-close").onclick = close;
+  document.getElementById("jury-bg").onclick = (e) => { if (e.target.id === "jury-bg") close(); };
+  const mk = document.getElementById("jury-mark-all"), off = document.getElementById("jury-off-all");
+  if (mk) mk.onclick = () => openJuryMark(allIds, false);
+  if (off) off.onclick = () => { if (confirm("¿Quitar el jury de todas las aulas?")) { setJury(Object.keys(data.doors).filter(k => data.doors[k].jury), null); close(); render(); } };
+}
+
 // Aulas "con entrega" (maquetas, proyectos, etc.): deben estar siempre cerradas. Solo los jefes las marcan.
 // d.entrega = { since, by, desde:"AAAA-MM-DD", hasta:"AAAA-MM-DD", catedra }
 function localDateStr(d) { d = d || new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
@@ -994,15 +1142,15 @@ function setEntrega(ids, entrega) {
 }
 // al abrir un aula con entrega sin que haya una solicitud de apertura, pide confirmar (el docente firma el libro en la guardia)
 function confirmEntregaOpen(doorsArr) {
-  const risky = doorsArr.filter(d => entregaState(d.entrega) === "activa" && !(d.pendingRequest && d.pendingRequest.type === "open"));
+  const risky = doorsArr.filter(d => (entregaState(d.entrega) === "activa" || entregaState(d.jury) === "activa") && !(d.pendingRequest && d.pendingRequest.type === "open"));
   if (!risky.length) return true;
   const names = risky.map(d => d.label).join(", ");
-  return confirm(`📦 ${names}: CON ENTREGA — debe estar siempre cerrada y NO hay una solicitud de apertura. Solo se abre si el docente firmó el libro de apertura en la guardia. ¿Confirmás que se abra?`);
+  return confirm(`📦 ${names}: CON ENTREGA / JURY — debe estar siempre cerrada y NO hay una solicitud de apertura. Solo se abre si el docente firmó el libro de apertura en la guardia. ¿Confirmás que se abra?`);
 }
 function confirmEntregaRequest(doorsArr) {
-  const list = doorsArr.filter(d => entregaState(d.entrega) === "activa");
+  const list = doorsArr.filter(d => entregaState(d.entrega) === "activa" || entregaState(d.jury) === "activa");
   if (!list.length) return true;
-  return confirm(`📦 ${list.map(d=>d.label).join(", ")}: CON ENTREGA. ¿El docente ya firmó el libro de apertura en la guardia?`);
+  return confirm(`📦 ${list.map(d=>d.label).join(", ")}: CON ENTREGA / JURY. ¿El docente ya firmó el libro de apertura en la guardia?`);
 }
 // hoja para cargar / editar la entrega: cátedra, desde y hasta (solo jefes)
 function openEntregaSheet(ids, fromSelection) {
@@ -1429,18 +1577,22 @@ function plateHTML(d) {
   const hasNotes = (data.notes||[]).some(n => n.doorIds && n.doorIds.includes(d.id));
   const eSt = entregaState(d.entrega);
   const entregaOpen = eSt === "activa" && d.status === "open";
+  const jSt = entregaState(d.jury);
+  let plateCls = eSt === "activa" ? (entregaOpen ? " entrega-open" : " entrega") : eSt === "vencida" ? " entrega-vencida" : "";
+  if (jSt === "activa" && eSt !== "activa") plateCls = d.status === "open" ? " entrega-open" : " jury";
+  const juryTag = jSt ? `<span class="mono" style="font-size:8px;font-weight:800;margin-top:2px;color:${jSt==="activa"&&d.status==="open"?"var(--red)":jSt==="vencida"?"#9A6700":"#1F5FA8"};text-align:center;line-height:1.1;">⚖️ ${jSt==="activa" ? (d.status==="open"?"¡ABIERTA!":"JURY")+"<br>hasta "+fmtDM(d.jury.hasta) : jSt==="proxima" ? "desde "+fmtDM(d.jury.desde) : "venció "+fmtDM(d.jury.hasta)}</span>` : "";
   let entregaTag = "";
   if (eSt === "activa") entregaTag = `<span class="mono" style="font-size:8px;font-weight:800;margin-top:2px;color:${entregaOpen?"var(--red)":"#6B3FA0"};text-align:center;line-height:1.1;">📦 ${entregaOpen?"¡ABIERTA!":"ENTREGA"}${d.entrega.hasta ? `<br>hasta ${fmtDM(d.entrega.hasta)}` : ""}</span>`;
   else if (eSt === "proxima") entregaTag = `<span class="mono" style="font-size:8px;font-weight:700;margin-top:2px;color:#6B3FA0;text-align:center;">📦 desde ${fmtDM(d.entrega.desde)}</span>`;
   else if (eSt === "vencida") entregaTag = `<span class="mono" style="font-size:8px;font-weight:800;margin-top:2px;color:#9A6700;text-align:center;line-height:1.1;">📦 venció ${fmtDM(d.entrega.hasta)}</span>`;
-  return `<button class="plate${eSt === "activa" ? (entregaOpen ? " entrega-open" : " entrega") : eSt === "vencida" ? " entrega-vencida" : ""}" data-door="${d.id}"
+  return `<button class="plate${plateCls}" data-door="${d.id}"
       style="${selected?'background:var(--brass-soft);border-color:var(--brass);border-width:2px;':''}">
     ${d.hasTV ? '<span style="position:absolute;top:3px;left:3px;font-size:10px;">📺</span>' : d.tvKeyOnly ? '<span title="Sin TV, pero su llave está en el manojo de TV" style="position:absolute;top:2px;left:2px;font-size:9px;background:var(--red);border-radius:3px;padding:0 2px;line-height:12px;">📺</span>' : ''}
     ${(d.anomalies||[]).some(a=>!a.resolved) ? '<span style="position:absolute;bottom:3px;right:3px;font-size:10px;">⚠️</span>' : ''}
     ${d.status==="closed" && d.clean ? '<span style="position:absolute;bottom:3px;left:3px;font-size:10px;">✅</span>' : ''}
     ${selectionMode ? `<span style="position:absolute;top:3px;right:3px;width:14px;height:14px;border-radius:4px;border:1px solid var(--brass);background:${selected?'var(--brass)':'#fff'};color:#fff;font-size:9px;display:flex;align-items:center;justify-content:center;">${selected?'✓':''}</span>` : (hasNotes ? '<span style="position:absolute;top:3px;right:3px;font-size:10px;">📝</span>' : '')}
     <span class="dot ${dotClass}" style="background:${dotColor}"></span>
-    <span class="mono" style="font-size:11px;font-weight:600;text-align:center;line-height:1.1;">${esc(d.label)}</span>${tag}${entregaTag}
+    <span class="mono" style="font-size:11px;font-weight:600;text-align:center;line-height:1.1;">${esc(d.label)}</span>${tag}${entregaTag}${juryTag}
   </button>`;
 }
 function bindPlates(root) {
@@ -1756,6 +1908,7 @@ function renderPersonal() {
 /* ---------- handlers por pestaña ---------- */
 function bindTabHandlers(root) {
   if (tab==="inicio") {
+    const oj = document.getElementById("open-jury"); if (oj) oj.onclick = openJurySheet;
     root.querySelectorAll("[data-filter]").forEach(b => b.onclick = () => { filterInicio = filterInicio===b.dataset.filter?null:b.dataset.filter; render(); });
     root.querySelectorAll("[data-goto]").forEach(b => b.onclick = () => { tab = b.dataset.goto; document.querySelectorAll(".tab-btn").forEach(x=>x.classList.toggle("active", x.dataset.tab===tab)); render(); });
     root.querySelectorAll("[data-close-note]").forEach(b => b.onclick = () => {
@@ -1938,6 +2091,10 @@ function renderSelectionBar(pendingList) {
         <button id="sel-entrega-on" style="flex:1;padding:8px;border-radius:6px;border:1px solid #6B3FA0;color:#6B3FA0;font-size:12px;font-weight:700;background:#fff;">📦 Marcar con entrega</button>
         <button id="sel-entrega-off" style="flex:1;padding:8px;border-radius:6px;border:1px solid #D8CFB8;color:var(--ink-soft);font-size:12px;font-weight:600;background:#fff;">Quitar entrega</button>
       </div>` : ""}
+      ${(user.role==="jefe"||isSuperuser(user)) ? `<div style="display:flex;gap:8px;margin-bottom:8px;">
+        <button id="sel-jury-on" style="flex:1;padding:8px;border-radius:6px;border:1px solid #1F5FA8;color:#1F5FA8;font-size:12px;font-weight:700;background:#fff;">⚖️ Marcar jury</button>
+        <button id="sel-jury-off" style="flex:1;padding:8px;border-radius:6px;border:1px solid #D8CFB8;color:var(--ink-soft);font-size:12px;font-weight:600;background:#fff;">Quitar jury</button>
+      </div>` : ""}
       <button id="sel-add-note" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--brass);font-size:12px;font-weight:600;">📝 Agregar nota para estas aulas</button>
     </div>`;
   document.body.appendChild(div);
@@ -1960,6 +2117,9 @@ function renderSelectionBar(pendingList) {
   if (rc) rc.onclick = () => { const doorsArr = selectedIds.map(id=>data.doors[id]); if (confirmIfAlreadyInState(doorsArr, "closed")) bulkRequest("closed"); };
   const eOn = document.getElementById("sel-entrega-on"), eOff = document.getElementById("sel-entrega-off");
   if (eOn) eOn.onclick = () => openEntregaSheet(selectedIds, true);
+  const jOn = document.getElementById("sel-jury-on"), jOff = document.getElementById("sel-jury-off");
+  if (jOn) jOn.onclick = () => openJuryMark(selectedIds, true);
+  if (jOff) jOff.onclick = () => { if (confirm("¿Quitar el jury de las aulas seleccionadas?")) { setJury(selectedIds, null); clearSelection(); } };
   if (eOff) eOff.onclick = () => { if (confirm(`¿Quitar "con entrega" de ${selectedIds.length} aula(s)?`)) { setEntrega(selectedIds, null); clearSelection(); } };
   document.getElementById("sel-add-note").onclick = () => { noteDraftIds = [...selectedIds]; renderNoteSheet(); };
 }
@@ -2340,8 +2500,11 @@ function renderDoorDetail() {
   const place = () => {
     const h = tabs && !tabs.classList.contains("hidden") ? tabs.offsetHeight : 0;
     b.style.bottom = h ? (h + 4) + "px" : "calc(4px + env(safe-area-inset-bottom, 0px))";
+    const fab = document.getElementById("jury-fab");
+    if (fab) { fab.style.display = h ? "block" : "none"; fab.style.bottom = (h + 6) + "px"; }
   };
   place();
+  const fab0 = document.getElementById("jury-fab"); if (fab0) fab0.onclick = openJurySheet;
   window.addEventListener("resize", place);
   if (window.ResizeObserver && tabs) new ResizeObserver(place).observe(tabs);
 })();
