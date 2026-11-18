@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <title>Control Seguridad FADU</title>
 <link rel="manifest" href="manifest.json" />
 <meta name="theme-color" content="#22303C" />
@@ -44,6 +44,7 @@
   .pgf{animation:pulseG .7s ease-in-out infinite;} .prf{animation:pulseR .7s ease-in-out infinite;}
   .tabs{position:fixed;bottom:0;left:0;right:0;display:flex;justify-content:center;}
   #jury-fab{position:fixed;left:8px;bottom:4px;z-index:49;display:none;font-size:12px;font-weight:700;color:#1F5FA8;background:#DCEBFA;border:1px solid #1F5FA8;border-radius:16px;padding:6px 12px;box-shadow:0 1px 6px rgba(0,0,0,.2);}
+  html,body{touch-action:pan-x pan-y;}
   #ver-badge{position:fixed;right:8px;bottom:4px;z-index:49;font-size:10px;color:var(--ink-soft);opacity:.8;background:rgba(247,244,236,.88);padding:1px 6px;border-radius:6px;pointer-events:none;}
   .tabs-inner{max-width:480px;width:100%;background:#fff;border-top:1px solid #D8CFB8;display:flex;justify-content:space-around;padding:8px 4px;}
   .tab-btn{display:flex;flex-direction:column;align-items:center;gap:2px;font-size:10px;color:var(--ink-soft);position:relative;padding:2px 8px;}
@@ -191,7 +192,7 @@ const ZONES = [
 ];
 const DELAY_MS = 15 * 60 * 1000;
 
-const APP_VERSION = "1.17.16";
+const APP_VERSION = "1.17.17";
 const VERSION_HISTORY = [
   { version: "1.6.0", changes: [
     "Arreglado un error que dejaba de guardar cambios después de contradecir una solicitud (afectaba solo a esas aulas puntuales).",
@@ -318,12 +319,13 @@ const VERSION_HISTORY = [
     "Nuevo: si hay una versión más nueva con la app abierta, aparece un aviso abajo para actualizar.",
     "Nuevo: el número de versión se ve siempre abajo a la derecha de la pantalla.",
   ]},
-  { version: "1.17.16", changes: [
+  { version: "1.17.17", changes: [
     "⚖️ NUEVO · JURY: la app ahora sabe qué aulas tienen jury. Los jefes las marcan con los días (todas juntas o de a una) y se ven en azul con JURY hasta dd/mm. Igual que las aulas con entrega, deben estar siempre cerradas.",
     "🔎 Botón ⚖️ Jury (abajo a la izquierda, en todas las pantallas): buscá por número de tribunal (T24), aula, cátedra o coordinador y mirá al instante dónde está, con su coordinador, las cátedras, la materialización y si el aula está abierta o cerrada.",
     "📋 Al tocar un aula con jury ves los datos de la planilla: tribunal, coordinador, cátedras y materialización. Los jefes pueden editar las fechas o desasignarla.",
     "🧹 Los jefes pueden desasignar todas las aulas del jury de una sola vez, o elegir solo algunas con la selección múltiple.",
     "🗑️ Personal: quienes tienen el permiso para gestionar cátedras ahora pueden borrar todas las cátedras de una vez, para cuando termina el año.",
+    "🤏 Arreglado: se desactivó el zoom con dos dedos, que hacía agrandar la pantalla sin querer y daba problemas.",
   ]},
 ];
 // se mantiene por compatibilidad con el resto del código, siempre apunta a la version mas nueva
@@ -2540,6 +2542,10 @@ function renderDoorDetail() {
   window.addEventListener("resize", place);
   if (window.ResizeObserver && tabs) new ResizeObserver(place).observe(tabs);
 })();
+
+// ---- sin zoom con dos dedos (daba problemas) ----
+["gesturestart", "gesturechange", "gestureend"].forEach(ev => document.addEventListener(ev, e => e.preventDefault()));
+document.addEventListener("touchmove", e => { if (e.touches && e.touches.length > 1) e.preventDefault(); }, { passive: false });
 
 // ---- actualización automática ----
 // el service worker guarda siempre la última versión buena, y acá se compara contra la del servidor:
