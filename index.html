@@ -192,7 +192,7 @@ const ZONES = [
 ];
 const DELAY_MS = 15 * 60 * 1000;
 
-const APP_VERSION = "1.17.17";
+const APP_VERSION = "1.17.18";
 const VERSION_HISTORY = [
   { version: "1.6.0", changes: [
     "Arreglado un error que dejaba de guardar cambios después de contradecir una solicitud (afectaba solo a esas aulas puntuales).",
@@ -319,7 +319,8 @@ const VERSION_HISTORY = [
     "Nuevo: si hay una versión más nueva con la app abierta, aparece un aviso abajo para actualizar.",
     "Nuevo: el número de versión se ve siempre abajo a la derecha de la pantalla.",
   ]},
-  { version: "1.17.17", changes: [
+  { version: "1.17.18", changes: [
+    "⚖️ Jury actualizado: ya están cargados los 39 tribunales de esta semana (hasta el viernes 27/11), ahora también con los jurados de cada uno. Se pueden buscar por nombre.",
     "⚖️ NUEVO · JURY: la app ahora sabe qué aulas tienen jury. Los jefes las marcan con los días (todas juntas o de a una) y se ven en azul con JURY hasta dd/mm. Igual que las aulas con entrega, deben estar siempre cerradas.",
     "🔎 Botón ⚖️ Jury (abajo a la izquierda, en todas las pantallas): buscá por número de tribunal (T24), aula, cátedra o coordinador y mirá al instante dónde está, con su coordinador, las cátedras, la materialización y si el aula está abierta o cerrada.",
     "📋 Al tocar un aula con jury ves los datos de la planilla: tribunal, coordinador, cátedras y materialización. Los jefes pueden editar las fechas o desasignarla.",
@@ -978,62 +979,47 @@ function autoPlaceInSector(staff, sector) {
   return { ...staff, [user.name]: { ...me, zones: [sector] } };
 }
 // ---- Jury: tribunales de examen. La planilla se carga acá; las aulas se marcan igual que las "con entrega" (otro color) ----
-const JURY_SEMANA = "17/11";
-const JURY_RAW = `1|118|GOMEZ DIZ|TABA;MALDONADO;GOMEZ DIZ|EX PETRILLI NOCHE
-2|118|RED FERRARI|TABA;PULOPULO;RED FERRARI|EX PETRILLI NOCHE
-3|118|TABA|TABA;PULOPULO;TALLER NACION|EX PETRILLI NOCHE
-4|118|AVB|TABA;TALLER NACION;TALLER AVB|EX PETRILLI MAÑANA
-5|E101|MAESTRIPIERI|TABA;MAESTRIPIERI;MIRANDA|EX ROMEO
-6|E101|TABA|TABA;EXPLORA MAÑANA;SOLER|EX PETRILLI NOCHE
-7|E102|SOLER|TABA;SOLER;PULOPULO|EX PETRILLI NOCHE
-8|E102|EXPLORA MAÑANA|EXPLORA MAÑANA;TALLER NACION;TABA|EX MARCHETTI
-9|E103|RIO DE LA PLATA|RIO DE LA PLATA;TALLER NACION;TABA|EX MARCHETTI
-10|E103|DIEGUEZ|DIEGUEZ;TALLER NACION;RIO DE LA PLATA|
-11|E109|AMETTE|AMETTE;SOLER;TABA|EX MIGLIOLI
-12|E109|DIEGUEZ|AMETTE;SOLER;DIEGUEZ|EX PETRILLI MAÑANA
-13|E111|TTD|A+A;TTD;SUDAMERICA|EX AZNAR
-14|E111|A+A|A+A;TTD;PLAN B|EX AZNAR
-15|E111|A77|DIEGUEZ;A77;PLAN B|EX ROMEO
-16|E112D|ROCA SARDIN|LEDESMA;ROCA SARDIN;DIEGUEZ|EX MIGLIOLI
-17|E112C|PULOPULO|AMETTE;DIEGUEZ;PULOPULO|EX MIGLIOLI
-18|E112B|AMETTE|AMETTE;G. MONTANER;A+A|EX ROMEO
-19|E112A|TALLER NACION|G. MONTANER;A77;TALLER NACION|EX ROMEO
-20|E113|LEDESMA|EXPLORA MAÑANA;LEDESMA;AMETTE|EX AZNAR
-21|E113|PULOPULO|A77;ROCA SARDIN;PULOPULO|EX PETRILLI MAÑANA
-22|E113|G. MONTANER|ROCA SARDIN;G. MONTANER;A+A|EX AZNAR
-23|E118|FORMA Y PROYECTO|TALLER FORMA Y PROYECTO;G. MONTANER;PULOPULO|EX ROMEO
-24|E118|EXPLORA NOCHE|EXPLORA NOCHE;LESTARD CAJIDE JANCHES;PULOPULO|EX PETRILLI MAÑANA
-25|E119|DIEGUEZ|TALLER NACION;DIEGUEZ;PULOPULO|EX PETRILLI MAÑANA
-26|E119|A+A|TABA;A+A;AMETTE|EX PETRILLI NOCHE
-27|E121|AMETTE|LESTARD CAJIDE JANCHES;EXPLORA MAÑANA;AMETTE|EX PETRILLI MAÑANA
-28|E121|ROCA SARDIN|TABA;ROCA SARDIN;DIEGUEZ|EX MIGLIOLI
-29|E123|TABA|GOMEZ DIZ;TABA;JAIMES|EX MARCHETTI
-30|E123|SOLER|LEDESMA;GOMEZ DIZ;SOLER|EX ROMEO
-31|E123|LEDESMA|TABA;LEDESMA;G. MONTANER|EX AZNAR
-32|E124A|MOSCATO|DIEGUEZ;MOSCATO;A+A|EX MARCHETTI
-33|E124B|TALLER NACION|ROCA SARDIN;TABA;TALLER NACION|EX PETRILLI NOCHE
-34|E124C|LESTARD CAJIDE JANCHES|LESTARD CAJIDE JANCHES;A+A;AMETTE|EX PETRILLI MAÑANA
-35|E124D|SUDAMERICA|SUDAMERICA;TALLER NACION;TABA|EX ROMEO
-36|206|A+A|A+A;LEDESMA;DIEGUEZ|EX AZNAR
-37|206|A+A|A+A;TABA;DIEGUEZ|EX PETRILLI MAÑANA
-38|206|TALLER NACION|EXPLORA NOCHE;LEDESMA;TALLER NACION|
-39|206|EXPLORA NOCHE|EXPLORA NOCHE;ROCA SARDIN;TALLER NACION|EX MIGLIOLI
-40|226|TALLER NACION|ROCA SARDIN;TABA;TALLER NACION|EX PETRILLI NOCHE
-41|228|AMETTE|AMETTE;EXPLORA NOCHE;A+A|EX MIGLIOLI
-42|302|SOLER|DIEGUEZ;SOLER;A+A|EX AZNAR
-43|302|MALDONADO|DIEGUEZ;MALDONADO;A+A|EX AZNAR
-44|303|DIEGUEZ|DIEGUEZ;EXPLORA NOCHE;A+A|EX ROMEO
-45|303|G. MONTANER|ROCA SARDIN;PULOPULO;G. MONTANER|EX MIGLIOLI
-46|304|PLAN B|ROCA SARDIN;LESTARD CAJIDE JANCHES;PLAN B|EX PETRILLI MAÑANA
-47|304|LESTARD CAJIDE JANCHES|ROCA SARDIN;LESTARD CAJIDE JANCHES;MOSCATO|EX MARCHETTI
-48|305|TABA|G. MONTANER;DIEGUEZ;TABA|
-49|305|ROCA SARDIN|PLAN B;ROCA SARDIN;MOSCATO|EX MARCHETTI
-50|325|PULOPULO|PULOPULO;A77;PRADELLI|EX ROMEO
-51|326|LEDESMA|ROCA SARDIN;LEDESMA;TTD|EX AZNAR
-52|328|TABA|ROCA SARDIN;AMETTE;TABA|EX PETRILLI NOCHE
-53|329|ROCA SARDIN|ROCA SARDIN;AMETTE;PRADELLI|EX MIGLIOLI
-54|330|G. MONTANER|G. MONTANER;TTD;SOLER|`;
-const JURY = JURY_RAW.split("\n").map(l => { const p = l.split("|"); return { n: +p[0], aula: p[1], coord: p[2], cats: p[3].split(";"), mat: p[4] || "" }; });
+const JURY_SEMANA = "25 al 27/11";
+const JURY_RAW = `1|118|T. FORMA Y PROYECTO|A+A;EXPLORA;TSN SOLER NOCHE|M. Jesús Huarte;Ana Boscoboinik;Hernan Jagemann
+2|118|A+A|A+A;AMETTE;PLAN B|Valeria Matayoshi;Jeffrey Berk;Fernando Maggiolo
+3|E101|EXPLORA|DIEGUEZ;EXPLORA;MIRANDA|Fernando Servidio;Cristian Grasso;Mercedes Comesaña
+4|E101|LCJ|LCJ;EXPLORA;TABA EX MVYS|Luciano Intile;Guillermo Meyer;F. Martínez Nespral
+5|E102|SOLER NOCHE|TSN SOLER NOCHE;EXPLORA;T. FORMA Y PROYECTO|Nicolás Pinto Da Mota;Martín Kesselman;Victoria R. Lazzarino
+6|E102|SOLER MAÑANA|MAESTRIPIERI;SOLER MAÑANA;SUDAMERICA|Cesar Jaimes;Norberto Nenninger;Caride/R.Diaz/Gutierrez
+7|E103|LEDESMA|TABA EX MVYS;PRADELLI;LEDESMA|Guido Petella;Victoria Martín;Ferrino/Etchevers/Negroni
+8|E103|DIEGUEZ|TABA EX MVYS;DIEGUEZ;TALLER NACION|Maria Jorge;Mariano Kampelmacher;Buttazzoni / Croce
+9|E109|TABA EX MVYS|TABA EX MVYS;GOMEZ DIZ;TALLER NACION|Débora Bonafert;R. Busnelli / J. P. Negro;Mariana Grazina
+10|E109|PRADELLI|TABA EX MVYS;PRADELLI;MOSCATO|Geraldine Cannas;Carlos Olmos;Pablo Gallicer
+11|E111|TTD|DIEGUEZ;G. MONTANER;TTD|Enrico Cavaglià;Carlos Jurado;Francisco Cadau Infeld
+12|E111|AMETTE|AMETTE;G. MONTANER;TABA EX MVYS|Juan Ignacio Bechini;Bruno Emmer;Caballier / Serrot
+13|E112D|G. MONTANER|DIEGUEZ;G. MONTANER;MOSCATO|Mercedes Forero;Ana Sacone;Luis Wexler
+14|E112C|G. MONTANER|AMETTE;G. MONTANER;TABA EX MVYS|Marisa Giorno;Silvestre Castellani;Debora Cerchiara
+15|E112B|PLAN B|A77;PLAN B;TTD|Hector Sarlinga;Talía Pardo Petry;Alejandra Sosa
+16|E112A|PULOPULO|GOMEZ DIZ;PLAN B;PULOPULO|Nicolás Cambón;Florencia Pestoni;Moira Sanjurjo
+17|E113|ROCA SARDIN|T. FORMA Y PROYECTO;ROCA SARDIN;SUDAMERICA|Gustavo Menendez;Matías Alba;Florencia Rolla
+18|E113|G. MONTANER|A77;G. MONTANER;ROCA SARDIN|Claudia Lanosa;Pablo Roveran;Noelia Maldonado
+19|E118|DIEGUEZ|DIEGUEZ;SUDAMERICA;TABA EX MVYS|Fernando Galizia;E. Alvarez / N. Lowden;Carla Serafini
+20|E118|SUDAMERICA|RED FERRARI;SUDAMERICA;RIO DE LA PLATA|Alejandro Saavedra;Santiago Wood;Juan Diego Martinez
+21|E119|ROCA SARDIN|ROCA SARDIN;LEDESMA;TALLER AVB|Diego Abramzon;Matías Lleré;José Luis Sciarrotta
+22|E119|A77|ROCA SARDIN;A77;EXPLORA|Francisco Farías;Pedro Sardin;Lucia Stagni
+23|E121|RED FERRARI|EXPLORA;A77;RED FERRARI|Julia Alvarez;Juan Vacas;Mariano Bisbal
+24|E121|MALDONADO|EXPLORA;A77;MALDONADO|Fabio Bellocchi;Matías Mosquera;Gonzalo Violante
+25|E123|A77|G. MONTANER;A77;EXPLORA|Yanina Capdevila;NACION;Antonio Quartino Baza
+26|E123|MOSCATO|JAIMES;A+A;MOSCATO|Federico Stilman;Adriana Guevara;Claudio Malamut
+27|E124A|EXPLORA|G. MONTANER;EXPLORA;PRADELLI|Lucía Sedler;Javier Aleman;Gustavo Motta
+28|E124B|MIRANDA|G. MONTANER;SUDAMERICA;MIRANDA|Martín Díaz;Guadalupe Tagliabue;Dario Storminsky
+29|E124C|MIRANDA|G. MONTANER;SUDAMERICA;MIRANDA|Lía Petrucci;Diego Rodriguez;Pablo Lotorto
+30|E124D|G. MONTANER|G. MONTANER;SUDAMERICA;TALLER NACION|Julian Lastra;Jorge Stekar;María Laura Jakomin
+31|302|G. MONTANER|G. MONTANER;SUDAMERICA;TALLER NACION|César D’Angelica;Dimas Gonzalez;Raúl Enrique Chugar
+32|303|TALLER NACION|G. MONTANER;SUDAMERICA;TALLER NACION|Daniel Goldar;FORMA Y PROYECTO;Diego Matias Adad
+33|304|TALLER NACION|G. MONTANER;SUDAMERICA;TALLER NACION|Juan Cabral;Mariano G. Moreno;Valeria Grünert
+34|305|SUDAMERICA|MIRANDA;SUDAMERICA;TALLER NACION|Lucas Di Nunzio;EXPLORA;C. Pumares / A. Cardoso
+35|325|SUDAMERICA|MIRANDA;SUDAMERICA;PULOPULO|Teresa Blanquer;Pablo Curone;Eduardo Schopperle
+36|326|SUDAMERICA|MIRANDA;SUDAMERICA;PULOPULO|Santiago Herrera;Oscar Vazquez;R. Gallardo / M. Ruiz
+37|328|G. MONTANER|SUDAMERICA;G. MONTANER;NACION|Pablo Vidal;Daniel Novaro;F. Liand / M. Pereyra
+38|329|TABA EX MVYS|A77;G. MONTANER;TABA EX MVYS|Facundo Marzano;Edgardo L. Albarellos;Urrutia/Monner Sans/ Funes
+39|330|TABA EX MVYS|ROCA SARDIN;DIEGUEZ;TABA EX MVYS|Nicolás Goldenberg;Santiago Chiban;Francisco Hesayne`;
+const JURY = JURY_RAW.split("\n").map(l => { const p = l.split("|"); return { n: +p[0], aula: p[1], coord: p[2], cats: p[3].split(";"), jur: p[4] ? p[4].split(";") : [] }; });
 function sq(x) { return normS(x).replace(/[^a-z0-9]/g, ""); }
 function normS(x) { return String(x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase(); }
 // "118" -> aula 118; "E101" -> EP101; las 3xx no existen en la app (devuelve null)
@@ -1082,7 +1068,7 @@ function juryDetailHTML(d) {
   return `<div class="card" style="margin-bottom:16px;background:#DCEBFA;border:2px solid ${col};">
     <p style="font-size:13px;font-weight:800;color:${col};margin:0 0 2px;">⚖️ ${st === "proxima" ? "JURY (todavía no empezó)" : st === "vencida" ? "JURY — ya terminó" : "AULA CON JURY"}</p>
     <p style="font-size:13px;margin:4px 0 8px;">📅 ${esc(entregaRango(d.jury))}</p>
-    ${ts.length ? ts.map(t => `<div style="border-top:1px solid #B9D3EE;padding:6px 0;"><p style="margin:0;font-size:13px;font-weight:800;">T ${t.n} · coordina ${esc(t.coord)}</p><p style="margin:2px 0 0;font-size:12px;">Cátedras: ${esc(t.cats.join(" · "))}</p>${t.mat ? `<p style="margin:2px 0 0;font-size:12px;color:var(--ink-soft);">Materialización: ${esc(t.mat)}</p>` : ""}</div>`).join("") : `<p style="font-size:12px;margin:0;">Sin tribunales cargados en esta aula.</p>`}
+    ${ts.length ? ts.map(t => `<div style="border-top:1px solid #B9D3EE;padding:6px 0;"><p style="margin:0;font-size:13px;font-weight:800;">T ${t.n} · coordina ${esc(t.coord)}</p><p style="margin:2px 0 0;font-size:12px;">Cátedras: ${esc(t.cats.join(" · "))}</p>${t.jur.length ? `<p style="margin:2px 0 0;font-size:12px;color:var(--ink-soft);">Jurados: ${esc(t.jur.join(" · "))}</p>` : ""}</div>`).join("") : `<p style="font-size:12px;margin:0;">Sin tribunales cargados en esta aula.</p>`}
     ${st === "vencida" ? `<p style="font-size:12px;margin:8px 0 0;color:${col};font-weight:600;">Ya pasó la fecha del jury. Un jefe tiene que quitarlo para liberar el aula.</p>` : `<p style="font-size:12px;margin:8px 0 0;">Debe permanecer <b>siempre cerrada</b> durante el jury.</p>`}
     ${d.jury.by ? `<p style="font-size:10px;color:var(--ink-soft);margin:6px 0 0;">Cargada por ${esc(d.jury.by)}${d.jury.since ? " · " + elapsed(d.jury.since) : ""}</p>` : ""}
     ${isJ ? `<div style="display:flex;gap:8px;margin-top:10px;"><button id="det-jury-edit" style="flex:1;padding:8px;border-radius:6px;border:1px solid #1F5FA8;color:#1F5FA8;font-size:12px;font-weight:700;background:#fff;">Editar fechas</button><button id="det-jury-rm" style="flex:1;padding:8px;border-radius:6px;border:1px solid var(--red);color:var(--red);font-size:12px;font-weight:700;background:#fff;">Desasignar del jury</button></div>` : ""}
@@ -1096,14 +1082,14 @@ function openJurySheet() {
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;"><h2 class="display" style="font-size:20px;font-weight:700;margin:0;color:#1F5FA8;">⚖️ Jury</h2><button id="jury-close" style="font-size:20px;">✕</button></div>
     <p class="mono" style="font-size:11px;color:var(--ink-soft);margin:0 0 10px;">Planilla del ${JURY_SEMANA} · ${JURY.length} tribunales</p>
     ${isJefe ? `<div style="display:flex;gap:8px;margin-bottom:10px;"><button id="jury-mark-all" style="flex:1;padding:8px;border-radius:6px;border:1px solid #1F5FA8;color:#1F5FA8;font-size:12px;font-weight:700;background:#fff;">⚖️ Marcar todas las aulas</button><button id="jury-off-all" style="flex:1;padding:8px;border-radius:6px;border:1px solid #D8CFB8;color:var(--ink-soft);font-size:12px;font-weight:600;background:#fff;">Desasignar todas</button></div>` : ""}
-    <input id="jury-q" placeholder="Buscar: nº de tribunal, aula, cátedra o coordinador" autocomplete="off" style="width:100%;border:1px solid #D8CFB8;border-radius:8px;padding:11px 12px;font-size:14px;" />
+    <input id="jury-q" placeholder="Buscar: nº de tribunal, aula, cátedra, coordinador o jurado" autocomplete="off" style="width:100%;border:1px solid #D8CFB8;border-radius:8px;padding:11px 12px;font-size:14px;" />
     <div id="jury-list" style="margin-top:10px;"></div></div></div>`;
   const q = document.getElementById("jury-q"), box = document.getElementById("jury-list");
   const paint = () => {
     const t0 = normS(q.value).trim().replace(/^t\s*(?=\d)/, "");
     let list = JURY;
     if (t0) {
-      list = /^\d+$/.test(t0) ? JURY.filter(t => String(t.n) === t0 || normS(t.aula).includes(t0)) : JURY.filter(t => sq([t.aula, "taller " + t.aula, t.coord, t.cats.join(" "), t.mat].join(" ")).includes(sq(t0)));
+      list = /^\d+$/.test(t0) ? JURY.filter(t => String(t.n) === t0 || normS(t.aula).includes(t0)) : JURY.filter(t => sq([t.aula, "taller " + t.aula, t.coord, t.cats.join(" "), t.jur.join(" ")].join(" ")).includes(sq(t0)));
       list = [...list].sort((a, b) => (String(b.n) === t0) - (String(a.n) === t0));
     }
     box.innerHTML = list.length ? list.map(t => {
@@ -1112,7 +1098,7 @@ function openJurySheet() {
         <p style="margin:0 0 2px;font-size:15px;font-weight:800;color:#1F5FA8;">T ${t.n} <span style="color:var(--ink);font-weight:700;">· Taller ${esc(t.aula)}</span></p>
         <p style="margin:0;font-size:12px;"><b>Coordinador:</b> ${esc(t.coord)}</p>
         <p style="margin:2px 0 0;font-size:12px;"><b>Cátedras:</b> ${esc(t.cats.join(" · "))}</p>
-        ${t.mat ? `<p style="margin:2px 0 0;font-size:12px;color:var(--ink-soft);"><b>Materialización:</b> ${esc(t.mat)}</p>` : ""}
+        ${t.jur.length ? `<p style="margin:2px 0 0;font-size:12px;color:var(--ink-soft);"><b>Jurados:</b> ${esc(t.jur.join(" · "))}</p>` : ""}
         <p style="margin:6px 0 0;font-size:12px;">${d ? `${d.status === "open" ? "🔓 abierta" : "🔒 cerrada"}${js ? ` · ⚖️ jury ${esc(entregaRango(d.jury))}` : ""}` : "<span style=\"color:var(--ink-soft);\">Aula no cargada en la app</span>"}</p>
         ${d ? `<button data-go="${id}" style="margin-top:6px;padding:6px 12px;border-radius:6px;border:1px solid #1F5FA8;color:#1F5FA8;font-size:12px;font-weight:700;background:#fff;">Ver aula ${esc(d.label)}</button>` : ""}
       </div>`;
